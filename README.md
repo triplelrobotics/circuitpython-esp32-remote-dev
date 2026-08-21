@@ -48,7 +48,8 @@ Secret Storage and is never written to extension settings or this repository.
 
 Directories are loaded on demand from the CircuitPython Web Workflow `/fs/`
 API. Use the refresh icon in the view title to reload the tree. Selecting a
-file opens its current contents in a read-only editor backed by the device.
+text file opens its current contents in an editor backed by the device. Saving
+the editor writes the complete file back to the same remote path.
 
 Authentication failures offer a password retry. Missing password configuration,
 unreachable devices, timeouts, missing paths, and invalid API responses are
@@ -57,6 +58,8 @@ reported as VS Code errors and in the **CircuitPython Remote** output channel.
 ## Current scope
 
 - Implemented: automatic mDNS discovery, device selection, password
-  authentication, remote file tree, refresh, and read-only file opening.
-- Not implemented: file upload/save, serial, REPL, firmware flashing, project
-  templates, AI features, or complex configuration UI.
+  authentication, remote file tree, refresh, and editing existing remote text
+  files.
+- Not implemented: creating, deleting, renaming or uploading files; serial,
+  REPL, firmware flashing, project templates, AI features, or complex
+  configuration UI.
