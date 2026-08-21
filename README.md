@@ -1,7 +1,7 @@
 # CircuitPython Remote
 
 A small VS Code extension for discovering CircuitPython Web Workflow devices
-and, in later milestones, editing their files directly over Wi-Fi.
+and browsing their files directly over Wi-Fi.
 
 ## Milestone 1: mDNS discovery
 
@@ -39,7 +39,24 @@ Expected status:
 CircuitPython: 192.168.x.x
 ```
 
+## Milestone 2: remote file browser
+
+Open the **CircuitPython Remote** section in the Explorer sidebar, then click
+the plug icon to select a discovered board. Enter the board's
+`CIRCUITPY_WEB_API_PASSWORD` when prompted. The password is stored in VS Code's
+Secret Storage and is never written to extension settings or this repository.
+
+Directories are loaded on demand from the CircuitPython Web Workflow `/fs/`
+API. Use the refresh icon in the view title to reload the tree. Selecting a
+file opens its current contents in a read-only editor backed by the device.
+
+Authentication failures offer a password retry. Missing password configuration,
+unreachable devices, timeouts, missing paths, and invalid API responses are
+reported as VS Code errors and in the **CircuitPython Remote** output channel.
+
 ## Current scope
 
-- Implemented: automatic mDNS discovery and IP display.
-- Not implemented yet: authentication, remote file tree, open, or save.
+- Implemented: automatic mDNS discovery, device selection, password
+  authentication, remote file tree, refresh, and read-only file opening.
+- Not implemented: file upload/save, serial, REPL, firmware flashing, project
+  templates, AI features, or complex configuration UI.

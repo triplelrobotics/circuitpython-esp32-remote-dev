@@ -14,7 +14,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:circuitpythonRemote.discover"
+    "onCommand:circuitpythonRemote.discover",
+    "onView:circuitpythonRemote.files"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -22,8 +23,48 @@
       {
         "command": "circuitpythonRemote.discover",
         "title": "CircuitPython Remote: Discover Device"
+      },
+      {
+        "command": "circuitpythonRemote.selectDevice",
+        "title": "CircuitPython Remote: Select Device",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "circuitpythonRemote.refresh",
+        "title": "CircuitPython Remote: Refresh",
+        "icon": "$(refresh)"
       }
-    ]
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "circuitpythonRemote.files",
+          "name": "CircuitPython Remote",
+          "icon": "$(remote-explorer)"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "circuitpythonRemote.files",
+        "contents": "Select a discovered CircuitPython device to browse its files.\n[Select Device](command:circuitpythonRemote.selectDevice)",
+        "when": "!circuitpythonRemote.deviceSelected"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "circuitpythonRemote.selectDevice",
+          "when": "view == circuitpythonRemote.files",
+          "group": "navigation@1"
+        },
+        {
+          "command": "circuitpythonRemote.refresh",
+          "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
+          "group": "navigation@2"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "tsc -p ./",
