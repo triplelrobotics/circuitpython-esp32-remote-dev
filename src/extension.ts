@@ -22,6 +22,19 @@ interface BonjourInterfaceOptions extends Partial<ServiceConfig> {
   interface: string;
 }
 
+const binaryFileExtensions = new Set([
+  ".7z", ".bin", ".bmp", ".elf", ".flac", ".gif", ".gz", ".hex",
+  ".ico", ".jpeg", ".jpg", ".mp3", ".mpy", ".ogg", ".otf", ".pcf",
+  ".pdf", ".png", ".tar", ".ttf", ".uf2", ".wav", ".webp", ".woff",
+  ".woff2", ".zip",
+]);
+
+function isKnownBinaryPath(path: string): boolean {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 && binaryFileExtensions.has(name.slice(dot).toLocaleLowerCase());
+}
+
 interface DirectoryEntry {
   name: string;
   directory: boolean;
@@ -450,6 +463,11 @@ class RemoteFileSystem implements vscode.FileSystemProvider {
   }
 
   async writeFile(uri: vscode.Uri, content: Uint8Array): Promise<void> {
+    if (isKnownBinaryPath(uri.path)) {
+      throw vscode.FileSystemError.NoPermissions(
+        `Binary files cannot be saved as text: ${uri.path}`,
+      );
+    }
     const device = this.deviceFor(uri);
     try {
       await this.client.writeFile(device, uri.path, content);
@@ -652,6 +670,9 @@ export function activate(context: vscode.ExtensionContext): void {
         if (value === "." || value === "..") return "This file name is not allowed.";
         if (/[\\/\0]/.test(value)) return "Enter a name only, without a path or slash.";
         if (value === oldName) return "Enter a different file name.";
+        if (isKnownBinaryPath(value) !== isKnownBinaryPath(oldName)) {
+          return "Renaming between text and binary file types is not allowed.";
+        }
         return undefined;
       },
     });
@@ -697,6 +718,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("circuitpythonRemote.deleteFile", deleteFile),
     vscode.commands.registerCommand("circuitpythonRemote.renameFile", renameFile),
     vscode.commands.registerCommand("circuitpythonRemote.openFile", async (entry: RemoteEntry) => {
+      if (isKnownBinaryPath(entry.remotePath)) {
+        void vscode.window.showWarningMessage(
+          `${entry.remotePath} is a binary file and cannot be opened as text.`,
+        );
+        return;
+      }
       const uri = remoteUri(entry.device, entry.remotePath);
       const document = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(document, { preview: true });

@@ -55,7 +55,11 @@ create one inside that directory. Existing names are not overwritten. Remote
 files can be deleted from their context menu after confirmation. Files with
 unsaved editor changes must be saved or discarded before deletion. Individual
 files can also be renamed within their current directory. Open editor tabs are
-updated to use the new remote path.
+updated to use the new remote path. Known binary formats such as `.mpy`,
+firmware, images, fonts, audio, and archives remain visible in the tree but are
+blocked from text opening and saving to prevent accidental corruption. Renaming
+between text and known binary file types is also blocked, while renaming within
+the same category remains available.
 
 Authentication failures offer a password retry. Missing password configuration,
 unreachable devices, timeouts, missing paths, and invalid API responses are
@@ -65,7 +69,8 @@ reported as VS Code errors and in the **CircuitPython Remote** output channel.
 
 - Implemented: automatic mDNS discovery, device selection, password
   authentication, remote file tree, refresh, editing existing remote text
-  files, creating new files, and deleting or renaming individual files.
+  files, creating new files, deleting or renaming individual files, and binary
+  file write protection.
 - Not implemented: creating, deleting or renaming directories; uploading files;
   serial, REPL, firmware flashing, project templates, AI features, or complex
   configuration UI.
