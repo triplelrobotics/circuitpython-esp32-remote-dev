@@ -287,6 +287,7 @@ class RemoteFileTree implements vscode.TreeDataProvider<RemoteEntry> {
   private selectedDevice: CircuitPythonDevice | undefined;
 
   constructor(private readonly client: WebWorkflowClient, private readonly output: vscode.OutputChannel) {}
+  get device(): CircuitPythonDevice | undefined { return this.selectedDevice; }
   selectDevice(device: CircuitPythonDevice): void { this.selectedDevice = device; this.changed.fire(); }
   refresh(): void { this.changed.fire(); }
   getTreeItem(element: RemoteEntry): vscode.TreeItem { return element; }
@@ -410,6 +411,14 @@ class RemoteFileSystem implements vscode.FileSystemProvider {
   }
 }
 
+function remoteUri(device: CircuitPythonDevice, path: string): vscode.Uri {
+  return vscode.Uri.from({
+    scheme: "circuitpython-remote",
+    path,
+    query: `device=${encodeURIComponent(device.key)}`,
+  });
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("CircuitPython Remote");
   const discovery = new CircuitPythonDiscovery(output);
@@ -426,6 +435,44 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.commands.executeCommand("setContext", "circuitpythonRemote.deviceSelected", true);
   };
 
+  const newFile = async (entry?: RemoteEntry): Promise<void> => {
+    const device = entry?.device ?? tree.device;
+    if (!device) {
+      void vscode.window.showInformationMessage("Select a CircuitPython device first.");
+      return;
+    }
+    const directory = entry?.isDirectory ? entry.remotePath : "/";
+    const name = await vscode.window.showInputBox({
+      title: `New file in ${directory}`,
+      prompt: "Enter a file name",
+      placeHolder: "example.py",
+      ignoreFocusOut: true,
+      validateInput: (value) => {
+        if (!value || value !== value.trim()) return "Enter a file name without leading or trailing spaces.";
+        if (value === "." || value === "..") return "This file name is not allowed.";
+        if (/[\\/\0]/.test(value)) return "Enter a name only, without a path or slash.";
+        return undefined;
+      },
+    });
+    if (!name) return;
+
+    try {
+      const entries = await client.readDirectory(device, directory);
+      if (entries.some((candidate) => candidate.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+        void vscode.window.showErrorMessage(`A remote file or directory named "${name}" already exists.`);
+        return;
+      }
+
+      const uri = remoteUri(device, `${directory}${name}`);
+      await remoteFiles.writeFile(uri, new Uint8Array());
+      const document = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(document, { preview: false });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`CircuitPython Remote: ${message}`);
+    }
+  };
+
   context.subscriptions.push(
     output, discovery, treeView,
     vscode.workspace.registerFileSystemProvider("circuitpython-remote", remoteFiles, {
@@ -437,12 +484,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand("circuitpythonRemote.selectDevice", selectDevice),
     vscode.commands.registerCommand("circuitpythonRemote.refresh", () => tree.refresh()),
+    vscode.commands.registerCommand("circuitpythonRemote.newFile", newFile),
     vscode.commands.registerCommand("circuitpythonRemote.openFile", async (entry: RemoteEntry) => {
-      const uri = vscode.Uri.from({
-        scheme: "circuitpython-remote",
-        path: entry.remotePath,
-        query: `device=${encodeURIComponent(entry.device.key)}`,
-      });
+      const uri = remoteUri(entry.device, entry.remotePath);
       const document = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(document, { preview: true });
     }),

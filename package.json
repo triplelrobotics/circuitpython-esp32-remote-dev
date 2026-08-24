@@ -33,6 +33,11 @@
         "command": "circuitpythonRemote.refresh",
         "title": "CircuitPython Remote: Refresh",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "circuitpythonRemote.newFile",
+        "title": "CircuitPython Remote: New File",
+        "icon": "$(new-file)"
       }
     ],
     "views": {
@@ -62,6 +67,18 @@
           "command": "circuitpythonRemote.refresh",
           "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
           "group": "navigation@2"
+        },
+        {
+          "command": "circuitpythonRemote.newFile",
+          "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "circuitpythonRemote.newFile",
+          "when": "view == circuitpythonRemote.files && viewItem == remoteDirectory",
+          "group": "1_modification@1"
         }
       ]
     }
