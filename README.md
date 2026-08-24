@@ -53,7 +53,9 @@ the editor writes the complete file back to the same remote path. Use the new
 file button to create a file in the root, or right-click a remote directory to
 create one inside that directory. Existing names are not overwritten. Remote
 files can be deleted from their context menu after confirmation. Files with
-unsaved editor changes must be saved or discarded before deletion.
+unsaved editor changes must be saved or discarded before deletion. Individual
+files can also be renamed within their current directory. Open editor tabs are
+updated to use the new remote path.
 
 Authentication failures offer a password retry. Missing password configuration,
 unreachable devices, timeouts, missing paths, and invalid API responses are
@@ -63,7 +65,7 @@ reported as VS Code errors and in the **CircuitPython Remote** output channel.
 
 - Implemented: automatic mDNS discovery, device selection, password
   authentication, remote file tree, refresh, editing existing remote text
-  files, creating new files, and deleting individual files.
-- Not implemented: creating or deleting directories, renaming or uploading
-  files; serial, REPL, firmware flashing, project templates, AI features, or
-  complex configuration UI.
+  files, creating new files, and deleting or renaming individual files.
+- Not implemented: creating, deleting or renaming directories; uploading files;
+  serial, REPL, firmware flashing, project templates, AI features, or complex
+  configuration UI.

@@ -43,6 +43,11 @@
         "command": "circuitpythonRemote.deleteFile",
         "title": "CircuitPython Remote: Delete File",
         "icon": "$(trash)"
+      },
+      {
+        "command": "circuitpythonRemote.renameFile",
+        "title": "CircuitPython Remote: Rename File",
+        "icon": "$(edit)"
       }
     ],
     "views": {
@@ -89,6 +94,11 @@
           "command": "circuitpythonRemote.deleteFile",
           "when": "view == circuitpythonRemote.files && viewItem == remoteFile",
           "group": "1_modification@2"
+        },
+        {
+          "command": "circuitpythonRemote.renameFile",
+          "when": "view == circuitpythonRemote.files && viewItem == remoteFile",
+          "group": "1_modification@1"
         }
       ]
     }

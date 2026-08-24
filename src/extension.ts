@@ -288,6 +288,13 @@ class WebWorkflowClient {
     await this.request(device, path, { method: "DELETE" });
   }
 
+  async moveFile(device: CircuitPythonDevice, sourcePath: string, destinationPath: string): Promise<void> {
+    await this.request(device, sourcePath, {
+      method: "MOVE",
+      headers: { "X-Destination": this.apiPath(destinationPath) },
+    });
+  }
+
   async forgetPassword(device: CircuitPythonDevice): Promise<void> {
     await this.secrets.delete(this.secretKey(device));
   }
@@ -317,6 +324,7 @@ class WebWorkflowClient {
       if (response.status === 403) throw new WebWorkflowError("Web Workflow is disabled because CIRCUITPY_WEB_API_PASSWORD is not configured on the device.", 403);
       if (response.status === 404) throw new WebWorkflowError(`Remote path not found: ${path}`, 404);
       if (response.status === 409) throw new WebWorkflowError("The CircuitPython filesystem is not writable, usually because USB currently owns it.", 409);
+      if (response.status === 412) throw new WebWorkflowError("The destination path is already in use.", 412);
       if (response.status === 413 || response.status === 417) throw new WebWorkflowError("The file is too large for the device to accept.", response.status);
       throw new WebWorkflowError(`The device returned HTTP ${response.status} ${response.statusText}.`, response.status);
     }
@@ -480,8 +488,30 @@ class RemoteFileSystem implements vscode.FileSystemProvider {
     }
   }
 
-  rename(oldUri: vscode.Uri): void {
-    throw vscode.FileSystemError.NoPermissions(`Renaming files is not implemented yet: ${oldUri.path}`);
+  async rename(oldUri: vscode.Uri, newUri: vscode.Uri): Promise<void> {
+    const device = this.deviceFor(oldUri);
+    if (this.deviceFor(newUri).key !== device.key) {
+      throw vscode.FileSystemError.NoPermissions("Moving files between devices is not supported.");
+    }
+    const file = await this.stat(oldUri);
+    if (file.type === vscode.FileType.Directory) {
+      throw vscode.FileSystemError.NoPermissions("Renaming remote directories is not implemented yet.");
+    }
+
+    try {
+      await this.client.moveFile(device, oldUri.path, newUri.path);
+      this.changed.fire([
+        { type: vscode.FileChangeType.Deleted, uri: oldUri },
+        { type: vscode.FileChangeType.Created, uri: newUri },
+      ]);
+      this.refreshTree();
+    } catch (error) {
+      if (error instanceof WebWorkflowError && error.status === 401) {
+        await this.client.forgetPassword(device);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      throw vscode.FileSystemError.Unavailable(`CircuitPython Remote: ${message}`);
+    }
   }
 
   private deviceFor(uri: vscode.Uri): CircuitPythonDevice {
@@ -594,6 +624,64 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const renameFile = async (entry?: RemoteEntry): Promise<void> => {
+    if (!entry || entry.isDirectory) return;
+    const oldUri = remoteUri(entry.device, entry.remotePath);
+    const openDocument = vscode.workspace.textDocuments.find(
+      (document) => document.uri.toString() === oldUri.toString(),
+    );
+    if (openDocument?.isDirty) {
+      void vscode.window.showWarningMessage(
+        `Save or discard the unsaved changes in ${entry.remotePath} before renaming it.`,
+      );
+      return;
+    }
+
+    const slash = entry.remotePath.lastIndexOf("/");
+    const directory = entry.remotePath.slice(0, slash + 1);
+    const oldName = entry.remotePath.slice(slash + 1);
+    const extension = oldName.lastIndexOf(".");
+    const newName = await vscode.window.showInputBox({
+      title: `Rename ${entry.remotePath}`,
+      prompt: "Enter a new file name",
+      value: oldName,
+      valueSelection: [0, extension > 0 ? extension : oldName.length],
+      ignoreFocusOut: true,
+      validateInput: (value) => {
+        if (!value || value !== value.trim()) return "Enter a file name without leading or trailing spaces.";
+        if (value === "." || value === "..") return "This file name is not allowed.";
+        if (/[\\/\0]/.test(value)) return "Enter a name only, without a path or slash.";
+        if (value === oldName) return "Enter a different file name.";
+        return undefined;
+      },
+    });
+    if (!newName) return;
+
+    try {
+      const entries = await client.readDirectory(entry.device, directory);
+      if (entries.some((candidate) => candidate.name !== oldName
+        && candidate.name.toLocaleLowerCase() === newName.toLocaleLowerCase())) {
+        void vscode.window.showErrorMessage(`A remote file or directory named "${newName}" already exists.`);
+        return;
+      }
+
+      const newUri = remoteUri(entry.device, `${directory}${newName}`);
+      const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs).filter(
+        (tab) => tab.input instanceof vscode.TabInputText
+          && tab.input.uri.toString() === oldUri.toString(),
+      );
+      await remoteFiles.rename(oldUri, newUri);
+      if (tabs.length > 0) {
+        await vscode.window.tabGroups.close(tabs, true);
+        const document = await vscode.workspace.openTextDocument(newUri);
+        await vscode.window.showTextDocument(document, { preview: false });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`CircuitPython Remote: ${message}`);
+    }
+  };
+
   context.subscriptions.push(
     output, discovery, treeView,
     vscode.workspace.registerFileSystemProvider("circuitpython-remote", remoteFiles, {
@@ -607,6 +695,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("circuitpythonRemote.refresh", () => tree.refresh()),
     vscode.commands.registerCommand("circuitpythonRemote.newFile", newFile),
     vscode.commands.registerCommand("circuitpythonRemote.deleteFile", deleteFile),
+    vscode.commands.registerCommand("circuitpythonRemote.renameFile", renameFile),
     vscode.commands.registerCommand("circuitpythonRemote.openFile", async (entry: RemoteEntry) => {
       const uri = remoteUri(entry.device, entry.remotePath);
       const document = await vscode.workspace.openTextDocument(uri);
