@@ -284,6 +284,10 @@ class WebWorkflowClient {
     });
   }
 
+  async deleteFile(device: CircuitPythonDevice, path: string): Promise<void> {
+    await this.request(device, path, { method: "DELETE" });
+  }
+
   async forgetPassword(device: CircuitPythonDevice): Promise<void> {
     await this.secrets.delete(this.secretKey(device));
   }
@@ -456,8 +460,24 @@ class RemoteFileSystem implements vscode.FileSystemProvider {
     throw vscode.FileSystemError.NoPermissions(`Creating directories is not implemented yet: ${uri.path}`);
   }
 
-  delete(uri: vscode.Uri): void {
-    throw vscode.FileSystemError.NoPermissions(`Deleting files is not implemented yet: ${uri.path}`);
+  async delete(uri: vscode.Uri): Promise<void> {
+    const device = this.deviceFor(uri);
+    const file = await this.stat(uri);
+    if (file.type === vscode.FileType.Directory) {
+      throw vscode.FileSystemError.NoPermissions("Deleting remote directories is not implemented yet.");
+    }
+
+    try {
+      await this.client.deleteFile(device, uri.path);
+      this.changed.fire([{ type: vscode.FileChangeType.Deleted, uri }]);
+      this.refreshTree();
+    } catch (error) {
+      if (error instanceof WebWorkflowError && error.status === 401) {
+        await this.client.forgetPassword(device);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      throw vscode.FileSystemError.Unavailable(`CircuitPython Remote: ${message}`);
+    }
   }
 
   rename(oldUri: vscode.Uri): void {
@@ -536,6 +556,44 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const deleteFile = async (entry?: RemoteEntry): Promise<void> => {
+    if (!entry || entry.isDirectory) return;
+    const uri = remoteUri(entry.device, entry.remotePath);
+    const openDocument = vscode.workspace.textDocuments.find(
+      (document) => document.uri.toString() === uri.toString(),
+    );
+    if (openDocument?.isDirty) {
+      void vscode.window.showWarningMessage(
+        `Save or discard the unsaved changes in ${entry.remotePath} before deleting it.`,
+      );
+      return;
+    }
+
+    const confirmation = await vscode.window.showWarningMessage(
+      `Delete remote file "${entry.remotePath}"?`,
+      {
+        modal: true,
+        detail: "This action cannot be undone.",
+      },
+      "Delete",
+    );
+    if (confirmation !== "Delete") return;
+
+    try {
+      await remoteFiles.delete(uri);
+      const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs).filter(
+        (tab) => tab.input instanceof vscode.TabInputText
+          && tab.input.uri.toString() === uri.toString(),
+      );
+      if (tabs.length > 0) {
+        await vscode.window.tabGroups.close(tabs, true);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`CircuitPython Remote: ${message}`);
+    }
+  };
+
   context.subscriptions.push(
     output, discovery, treeView,
     vscode.workspace.registerFileSystemProvider("circuitpython-remote", remoteFiles, {
@@ -548,6 +606,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("circuitpythonRemote.selectDevice", selectDevice),
     vscode.commands.registerCommand("circuitpythonRemote.refresh", () => tree.refresh()),
     vscode.commands.registerCommand("circuitpythonRemote.newFile", newFile),
+    vscode.commands.registerCommand("circuitpythonRemote.deleteFile", deleteFile),
     vscode.commands.registerCommand("circuitpythonRemote.openFile", async (entry: RemoteEntry) => {
       const uri = remoteUri(entry.device, entry.remotePath);
       const document = await vscode.workspace.openTextDocument(uri);

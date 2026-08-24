@@ -38,6 +38,11 @@
         "command": "circuitpythonRemote.newFile",
         "title": "CircuitPython Remote: New File",
         "icon": "$(new-file)"
+      },
+      {
+        "command": "circuitpythonRemote.deleteFile",
+        "title": "CircuitPython Remote: Delete File",
+        "icon": "$(trash)"
       }
     ],
     "views": {
@@ -79,6 +84,11 @@
           "command": "circuitpythonRemote.newFile",
           "when": "view == circuitpythonRemote.files && viewItem == remoteDirectory",
           "group": "1_modification@1"
+        },
+        {
+          "command": "circuitpythonRemote.deleteFile",
+          "when": "view == circuitpythonRemote.files && viewItem == remoteFile",
+          "group": "1_modification@2"
         }
       ]
     }

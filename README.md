@@ -51,7 +51,9 @@ API. Use the refresh icon in the view title to reload the tree. Selecting a
 text file opens its current contents in an editor backed by the device. Saving
 the editor writes the complete file back to the same remote path. Use the new
 file button to create a file in the root, or right-click a remote directory to
-create one inside that directory. Existing names are not overwritten.
+create one inside that directory. Existing names are not overwritten. Remote
+files can be deleted from their context menu after confirmation. Files with
+unsaved editor changes must be saved or discarded before deletion.
 
 Authentication failures offer a password retry. Missing password configuration,
 unreachable devices, timeouts, missing paths, and invalid API responses are
@@ -61,7 +63,7 @@ reported as VS Code errors and in the **CircuitPython Remote** output channel.
 
 - Implemented: automatic mDNS discovery, device selection, password
   authentication, remote file tree, refresh, editing existing remote text
-  files, and creating new files.
-- Not implemented: creating directories, deleting, renaming or uploading
+  files, creating new files, and deleting individual files.
+- Not implemented: creating or deleting directories, renaming or uploading
   files; serial, REPL, firmware flashing, project templates, AI features, or
   complex configuration UI.
