@@ -2,7 +2,7 @@
   "name": "circuitpython-remote",
   "displayName": "CircuitPython Remote",
   "description": "A lightweight wireless CircuitPython filesystem for VS Code.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "triplelrobotics",
   "author": "triplelrobotics",
   "license": "MIT",

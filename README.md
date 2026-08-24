@@ -1,17 +1,22 @@
 # CircuitPython Remote
 
-A small VS Code extension for discovering CircuitPython Web Workflow devices
-and browsing their files directly over Wi-Fi.
+A lightweight VS Code extension for discovering CircuitPython Web Workflow
+devices and editing their files over Wi-Fi.
 
-## Milestone 1: mDNS discovery
+## Features
 
-This version continuously browses for the `_circuitpython._tcp.local` mDNS
-service. When a board appears, its IPv4 address is shown in the VS Code status
-bar.
+- Discover `_circuitpython._tcp.local` devices over mDNS, including on Macs
+  with multiple active network interfaces.
+- Browse and refresh the remote filesystem through the Web Workflow `/fs/`
+  API.
+- Open, edit, save, create, delete, and rename individual text files.
+- Protect known binary formats such as `.mpy`, firmware, images, audio, fonts,
+  and archives from accidental text writes.
+- Store Web Workflow passwords in VS Code Secret Storage.
 
-### Board prerequisite
+## ESP32 setup
 
-CircuitPython Web Workflow must already be enabled in `settings.toml`:
+Enable CircuitPython Web Workflow in the board's `settings.toml`:
 
 ```toml
 CIRCUITPY_WIFI_SSID="your-wifi"
@@ -19,58 +24,59 @@ CIRCUITPY_WIFI_PASSWORD="your-wifi-password"
 CIRCUITPY_WEB_API_PASSWORD="choose-a-separate-password"
 ```
 
-Do not commit real passwords to this repository.
+Do not commit real passwords to this repository. Restart the ESP32 after
+changing `settings.toml`.
 
-### Run locally
+### Network setup
 
-1. Open this folder in VS Code.
+Connect the computer and ESP32 to the same local network. Upstream Internet
+access is not required. For a TP-Link device connected behind another router,
+**Access Point (AP) mode** is usually the simplest option because both devices
+receive addresses from the same DHCP server.
+
+Disable guest-network or client isolation. A DHCP reservation is recommended
+if the ESP32 should keep the same address. Verify Web Workflow access using the
+board's actual IP address:
+
+```sh
+curl --max-time 5 http://192.168.1.100/cp/version.json
+```
+
+If the request succeeds but discovery does not, check that mDNS/Bonjour traffic
+is allowed between Wi-Fi and Ethernet clients.
+
+## Use the extension
+
+1. Open **CircuitPython Remote** in the Explorer sidebar.
+2. Click the plug icon and select a discovered board.
+3. Enter its `CIRCUITPY_WEB_API_PASSWORD`.
+4. Browse the tree or use its toolbar and context menus to manage files.
+5. Click the refresh icon to reload the remote filesystem.
+
+Selecting a text file opens it in an editor backed by the ESP32. Saving the
+editor writes the complete file to the device. Binary files remain visible but
+cannot be opened or saved as text.
+
+Errors and discovery details are available under **View → Output →
+CircuitPython Remote**. Authentication failures offer a password retry.
+
+## Run from source
+
+1. Open this repository in VS Code.
 2. Run `npm install`.
 3. Press `F5` and choose **Run CircuitPython Remote**.
-4. In the Extension Development Host window, look at the left side of the
-   status bar.
-5. Power the CircuitPython board on the same LAN.
+4. Use the extension in the Extension Development Host window.
 
-For detailed discovery logs, open **View → Output** and select
-**CircuitPython Remote**.
-
-Expected status:
+When a board is discovered, the status bar displays an address such as:
 
 ```text
 CircuitPython: 192.168.x.x
 ```
 
-## Milestone 2: remote file browser
+## Current limitations
 
-Open the **CircuitPython Remote** section in the Explorer sidebar, then click
-the plug icon to select a discovered board. Enter the board's
-`CIRCUITPY_WEB_API_PASSWORD` when prompted. The password is stored in VS Code's
-Secret Storage and is never written to extension settings or this repository.
+The extension does not yet support directory creation, deletion, or renaming;
+file uploads; serial or REPL access; firmware flashing; project templates; or
+AI features.
 
-Directories are loaded on demand from the CircuitPython Web Workflow `/fs/`
-API. Use the refresh icon in the view title to reload the tree. Selecting a
-text file opens its current contents in an editor backed by the device. Saving
-the editor writes the complete file back to the same remote path. Use the new
-file button to create a file in the root, or right-click a remote directory to
-create one inside that directory. Existing names are not overwritten. Remote
-files can be deleted from their context menu after confirmation. Files with
-unsaved editor changes must be saved or discarded before deletion. Individual
-files can also be renamed within their current directory. Open editor tabs are
-updated to use the new remote path. Known binary formats such as `.mpy`,
-firmware, images, fonts, audio, and archives remain visible in the tree but are
-blocked from text opening and saving to prevent accidental corruption. Renaming
-between text and known binary file types is also blocked, while renaming within
-the same category remains available.
-
-Authentication failures offer a password retry. Missing password configuration,
-unreachable devices, timeouts, missing paths, and invalid API responses are
-reported as VS Code errors and in the **CircuitPython Remote** output channel.
-
-## Current scope
-
-- Implemented: automatic mDNS discovery, device selection, password
-  authentication, remote file tree, refresh, editing existing remote text
-  files, creating new files, deleting or renaming individual files, and binary
-  file write protection.
-- Not implemented: creating, deleting or renaming directories; uploading files;
-  serial, REPL, firmware flashing, project templates, AI features, or complex
-  configuration UI.
+See [CHANGELOG.md](CHANGELOG.md) for release history.
