@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { Bonjour, Browser, Service } from "bonjour-service";
+import { networkInterfaces } from "os";
+import { Bonjour, Browser, Service, ServiceConfig } from "bonjour-service";
 
 interface CircuitPythonDevice {
   key: string;
@@ -7,6 +8,18 @@ interface CircuitPythonDevice {
   hostname: string;
   ip: string;
   port: number;
+}
+
+interface DiscoveryBrowser {
+  bonjour: Bonjour;
+  browser: Browser;
+  interfaceName: string;
+  interfaceAddress: string;
+}
+
+interface BonjourInterfaceOptions extends Partial<ServiceConfig> {
+  bind: string;
+  interface: string;
 }
 
 interface DirectoryEntry {
@@ -30,9 +43,9 @@ class WebWorkflowError extends Error {
 }
 
 class CircuitPythonDiscovery implements vscode.Disposable {
-  private readonly bonjour = new Bonjour();
   private readonly devices = new Map<string, CircuitPythonDevice>();
-  private browser: Browser | undefined;
+  private readonly deviceSources = new Map<string, Set<string>>();
+  private readonly browsers: DiscoveryBrowser[] = [];
   private readonly status: vscode.StatusBarItem;
 
   constructor(private readonly output: vscode.OutputChannel) {
@@ -46,7 +59,7 @@ class CircuitPythonDiscovery implements vscode.Disposable {
   }
 
   start(): void {
-    if (this.browser) {
+    if (this.browsers.length > 0) {
       return;
     }
 
@@ -55,13 +68,39 @@ class CircuitPythonDiscovery implements vscode.Disposable {
       "Searching for _circuitpython._tcp.local devices…",
     );
 
-    this.browser = this.bonjour.find({
-      type: "circuitpython",
-      protocol: "tcp",
-    });
-
-    this.browser.on("up", (service: Service) => this.onDeviceUp(service));
-    this.browser.on("down", (service: Service) => this.onDeviceDown(service));
+    for (const network of this.ipv4Interfaces()) {
+      try {
+        const options: BonjourInterfaceOptions = {
+          bind: "0.0.0.0",
+          interface: network.address,
+        };
+        const bonjour = new Bonjour(options, (error: unknown) => {
+          this.output.appendLine(
+            `mDNS error on ${network.name} (${network.address}): ${String(error)}`,
+          );
+        });
+        const browser = bonjour.find({
+          type: "circuitpython",
+          protocol: "tcp",
+        });
+        const source = `${network.name}:${network.address}`;
+        browser.on("up", (service: Service) => this.onDeviceUp(service, source));
+        browser.on("down", (service: Service) => this.onDeviceDown(service, source));
+        this.browsers.push({
+          bonjour,
+          browser,
+          interfaceName: network.name,
+          interfaceAddress: network.address,
+        });
+        this.output.appendLine(
+          `Browsing mDNS on ${network.name} (${network.address})`,
+        );
+      } catch (error) {
+        this.output.appendLine(
+          `Unable to browse mDNS on ${network.name} (${network.address}): ${String(error)}`,
+        );
+      }
+    }
   }
 
   async showDevices(): Promise<void> {
@@ -116,7 +155,7 @@ class CircuitPythonDiscovery implements vscode.Disposable {
     return this.devices.get(key);
   }
 
-  private onDeviceUp(service: Service): void {
+  private onDeviceUp(service: Service, source: string): void {
     const ip = this.preferredIp(service.addresses ?? []);
     if (!ip) {
       this.output.appendLine(
@@ -135,18 +174,40 @@ class CircuitPythonDiscovery implements vscode.Disposable {
       port: service.port,
     };
 
+    const sources = this.deviceSources.get(key) ?? new Set<string>();
+    sources.add(source);
+    this.deviceSources.set(key, sources);
     this.devices.set(key, device);
     this.output.appendLine(
-      `Found ${device.name} at ${device.ip}:${device.port} (${device.hostname})`,
+      `Found ${device.name} at ${device.ip}:${device.port} (${device.hostname}) via ${source}`,
     );
     this.updateStatus();
   }
 
-  private onDeviceDown(service: Service): void {
+  private onDeviceDown(service: Service, source: string): void {
     const hostname = service.host || service.fqdn || service.name;
-    this.devices.delete(`${hostname}:${service.port}`);
+    const key = `${hostname}:${service.port}`;
+    const sources = this.deviceSources.get(key);
+    sources?.delete(source);
+    if (sources && sources.size > 0) {
+      return;
+    }
+    this.deviceSources.delete(key);
+    this.devices.delete(key);
     this.output.appendLine(`Device went offline: ${service.name || hostname}`);
     this.updateStatus();
+  }
+
+  private ipv4Interfaces(): { name: string; address: string }[] {
+    const interfaces: { name: string; address: string }[] = [];
+    for (const [name, addresses] of Object.entries(networkInterfaces())) {
+      for (const address of addresses ?? []) {
+        if (address.family === "IPv4" && !address.internal) {
+          interfaces.push({ name, address: address.address });
+        }
+      }
+    }
+    return interfaces;
   }
 
   private preferredIp(addresses: string[]): string | undefined {
@@ -166,8 +227,10 @@ class CircuitPythonDiscovery implements vscode.Disposable {
   }
 
   dispose(): void {
-    this.browser?.stop();
-    this.bonjour.destroy();
+    for (const discovery of this.browsers) {
+      discovery.browser.stop();
+      discovery.bonjour.destroy();
+    }
     this.status.dispose();
   }
 }
