@@ -12,6 +12,21 @@ CircuitPython Remote 0.0.2 is available for early testing on macOS.
 Back up important files on the board before testing remote write and delete
 operations.
 
+### Compatibility
+
+CircuitPython Remote is designed for boards that support CircuitPython Web
+Workflow. It does not work with every CircuitPython board.
+
+The current beta has been tested with:
+
+- ESP32-S3-DevKitC-1-N8R8
+- CircuitPython 10.2.1
+- Web Workflow API v4
+- VS Code on macOS
+
+Other CircuitPython boards, operating systems, firmware versions, and Web
+Workflow API versions have not yet been verified. Test reports are welcome.
+
 ## Feedback
 
 Found a problem or have an idea?
