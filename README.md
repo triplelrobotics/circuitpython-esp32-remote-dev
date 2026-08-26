@@ -3,6 +3,22 @@
 A lightweight VS Code extension for discovering CircuitPython Web Workflow
 devices and editing their files over Wi-Fi.
 
+## Beta release
+
+CircuitPython Remote 0.0.2 is available for early testing on macOS.
+
+[Download the latest beta](https://github.com/triplelrobotics/circuitpython-esp32-remote-dev/releases/tag/v0.0.2)
+
+Back up important files on the board before testing remote write and delete
+operations.
+
+## Feedback
+
+Found a problem or have an idea?
+
+- [Report a bug](https://github.com/triplelrobotics/circuitpython-esp32-remote-dev/issues/new?template=bug_report.yml)
+- [Request a feature](https://github.com/triplelrobotics/circuitpython-esp32-remote-dev/issues/new?template=feature_request.yml)
+
 ## Features
 
 - Discover `_circuitpython._tcp.local` devices over mDNS, including on Macs
