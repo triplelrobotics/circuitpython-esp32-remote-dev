@@ -1,0 +1,66 @@
+name: Feature request
+description: Suggest an improvement for CircuitPython Remote
+title: "[Feature]: "
+labels: []
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve CircuitPython Remote. Please describe the
+        user problem before proposing a specific implementation.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and what currently makes it difficult?
+      placeholder: |
+        I often need to upload an existing local file to the board, but...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Suggested behavior
+      description: How would you like the extension to work?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: How do you handle this task today?
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature area
+      options:
+        - Device discovery
+        - Remote file tree
+        - File editing
+        - File operations
+        - Authentication
+        - Network diagnostics
+        - User interface
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Relevant environment
+      description: Include the board, CircuitPython version, OS, or network setup if relevant.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing issues for a similar request.
+          required: true

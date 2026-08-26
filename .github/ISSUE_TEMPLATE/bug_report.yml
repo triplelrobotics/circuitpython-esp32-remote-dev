@@ -1,0 +1,131 @@
+name: Bug report
+description: Report a problem with CircuitPython Remote
+title: "[Bug]: "
+labels: []
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing CircuitPython Remote.
+
+        Remove passwords, Wi-Fi credentials, and other sensitive information
+        from logs and screenshots before submitting.
+
+  - type: input
+    id: extension-version
+    attributes:
+      label: Extension version
+      description: The installed CircuitPython Remote version
+      placeholder: "0.0.2"
+    validations:
+      required: true
+
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+      placeholder: "macOS 15.6, Windows 11, or Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: input
+    id: vscode-version
+    attributes:
+      label: VS Code version
+      placeholder: "1.xx.x"
+    validations:
+      required: true
+
+  - type: input
+    id: board
+    attributes:
+      label: CircuitPython board
+      placeholder: "ESP32-S3-DevKitC-1-N8R8"
+    validations:
+      required: true
+
+  - type: input
+    id: circuitpython-version
+    attributes:
+      label: CircuitPython version
+      placeholder: "10.2.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operation
+    attributes:
+      label: Affected operation
+      options:
+        - Device discovery
+        - Authentication
+        - File tree or refresh
+        - Opening a file
+        - Saving a file
+        - Creating a file
+        - Deleting a file
+        - Renaming a file
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: network
+    attributes:
+      label: Network setup
+      description: |
+        Describe how the computer and board are connected. Include router or
+        AP mode and whether Wi-Fi and Ethernet are both involved.
+      placeholder: |
+        Mac connected by Ethernet to a TP-Link access point.
+        ESP32 connected to the TP-Link 2.4 GHz Wi-Fi.
+        Both devices are on 192.168.1.x.
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem description
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open CircuitPython Remote
+        2. Select the device
+        3. Open code.py
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output logs
+      description: |
+        Copy relevant logs from View -> Output -> CircuitPython Remote.
+        Remove passwords, Wi-Fi credentials, and sensitive addresses first.
+      render: text
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add screenshots or other useful information here.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I removed passwords and Wi-Fi credentials from this report.
+          required: true
+        - label: I searched existing issues for the same problem.
+          required: true
