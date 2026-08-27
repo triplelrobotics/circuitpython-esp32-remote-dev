@@ -5,6 +5,22 @@
   "version": "0.0.2",
   "publisher": "triplelrobotics",
   "author": "triplelrobotics",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/triplelrobotics/circuitpython-esp32-remote-dev.git"
+  },
+  "homepage": "https://github.com/triplelrobotics/circuitpython-esp32-remote-dev#readme",
+  "bugs": {
+    "url": "https://github.com/triplelrobotics/circuitpython-esp32-remote-dev/issues"
+  },
+  "keywords": [
+    "circuitpython",
+    "esp32-s3",
+    "vscode-extension",
+    "web-workflow",
+    "wifi",
+    "remote-filesystem"
+  ],
   "license": "MIT",
   "engines": {
     "vscode": "^1.96.0"
