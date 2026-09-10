@@ -93,7 +93,7 @@
     "viewsWelcome": [
       {
         "view": "circuitpythonRemote.files",
-        "contents": "Select a discovered CircuitPython device to browse its files.\n[Select Device](command:circuitpythonRemote.selectDevice)",
+        "contents": "Select a discovered CircuitPython device to browse its files.\n[Select Device](command:circuitpythonRemote.selectDevice)\nDevice not appearing? [Connect by IP Address](command:circuitpythonRemote.connectByAddress)",
         "when": "!circuitpythonRemote.deviceSelected"
       }
     ],
