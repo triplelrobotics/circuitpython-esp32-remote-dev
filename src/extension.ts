@@ -46,6 +46,17 @@ interface DirectoryResponse {
   files: DirectoryEntry[];
 }
 
+interface VersionResponse {
+  web_api_version?: number;
+  board_name?: string;
+  hostname?: string;
+}
+
+interface DeviceQuickPickItem extends vscode.QuickPickItem {
+  device?: CircuitPythonDevice;
+  manual: boolean;
+}
+
 class WebWorkflowError extends Error {
   constructor(
     message: string,
@@ -142,30 +153,35 @@ class CircuitPythonDiscovery implements vscode.Disposable {
     }
   }
 
-  async pickDevice(): Promise<CircuitPythonDevice | undefined> {
+  async pickDevice(): Promise<CircuitPythonDevice | "manual" | undefined> {
     const devices = [...this.devices.values()];
-    if (devices.length === 0) {
-      void vscode.window.showInformationMessage(
-        "No CircuitPython Web Workflow device found yet. Still searching…",
-      );
-      return undefined;
-    }
-
+    const items: DeviceQuickPickItem[] = [...devices.map((device) => ({
+      label: device.name,
+      description: `${device.ip}:${device.port}`,
+      detail: device.hostname,
+      device,
+      manual: false,
+    })), {
+      label: "$(globe) Connect by IP Address…",
+      detail: "Connect without mDNS discovery",
+      manual: true,
+    }];
     const selected = await vscode.window.showQuickPick(
-      devices.map((device) => ({
-        label: device.name,
-        description: `${device.ip}:${device.port}`,
-        detail: device.hostname,
-        device,
-      })),
-      { placeHolder: "Select a CircuitPython device" },
+      items,
+      { placeHolder: devices.length > 0
+        ? "Select a CircuitPython device"
+        : "No devices discovered yet; enter an IP address to connect directly" },
     );
 
-    return selected?.device;
+    return selected?.manual ? "manual" : selected?.device;
   }
 
   getDevice(key: string): CircuitPythonDevice | undefined {
     return this.devices.get(key);
+  }
+
+  addManualDevice(device: CircuitPythonDevice): void {
+    this.devices.set(device.key, device);
   }
 
   private onDeviceUp(service: Service, source: string): void {
@@ -250,6 +266,37 @@ class CircuitPythonDiscovery implements vscode.Disposable {
 
 class WebWorkflowClient {
   constructor(private readonly secrets: vscode.SecretStorage, private readonly output: vscode.OutputChannel) {}
+
+  async identifyDevice(ip: string, port: number): Promise<CircuitPythonDevice> {
+    const url = `http://${ip}:${port}/cp/version.json`;
+    this.output.appendLine(`GET ${url}`);
+    let response: Response;
+    try {
+      response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new WebWorkflowError(`Unable to reach ${ip}:${port}: ${detail}`);
+    }
+    if (!response.ok) {
+      throw new WebWorkflowError(`The device returned HTTP ${response.status} ${response.statusText}.`, response.status);
+    }
+
+    let body: VersionResponse;
+    try { body = JSON.parse(await response.text()) as VersionResponse; }
+    catch { throw new WebWorkflowError("The address did not return valid CircuitPython version information."); }
+    if (typeof body.web_api_version !== "number") {
+      throw new WebWorkflowError("The address does not appear to be a CircuitPython Web Workflow device.");
+    }
+
+    const hostname = body.hostname || ip;
+    return {
+      key: `manual:${ip}:${port}`,
+      name: body.board_name || hostname,
+      hostname,
+      ip,
+      port,
+    };
+  }
 
   async ensurePassword(device: CircuitPythonDevice): Promise<boolean> {
     if (await this.secrets.get(this.secretKey(device))) return true;
@@ -572,6 +619,15 @@ function remoteUri(device: CircuitPythonDevice, path: string): vscode.Uri {
   });
 }
 
+function parseIpv4Address(value: string): { ip: string; port: number } | undefined {
+  const match = /^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?$/.exec(value);
+  if (!match) return undefined;
+  const octets = match[1].split(".").map(Number);
+  const port = match[2] ? Number(match[2]) : 80;
+  if (octets.some((octet) => octet > 255) || port < 1 || port > 65535) return undefined;
+  return { ip: match[1], port };
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("CircuitPython Remote");
   const discovery = new CircuitPythonDiscovery(output);
@@ -580,12 +636,44 @@ export function activate(context: vscode.ExtensionContext): void {
   const treeView = vscode.window.createTreeView("circuitpythonRemote.files", { treeDataProvider: tree, showCollapseAll: true });
   const remoteFiles = new RemoteFileSystem(discovery, client, () => tree.refresh());
 
-  const selectDevice = async (): Promise<void> => {
-    const device = await discovery.pickDevice();
-    if (!device || !(await client.ensurePassword(device))) return;
+  const useDevice = async (device: CircuitPythonDevice): Promise<void> => {
+    if (!(await client.ensurePassword(device))) return;
     tree.selectDevice(device);
     treeView.title = `CircuitPython: ${device.name}`;
     void vscode.commands.executeCommand("setContext", "circuitpythonRemote.deviceSelected", true);
+  };
+
+  const connectByAddress = async (): Promise<void> => {
+    const address = await vscode.window.showInputBox({
+      title: "Connect to CircuitPython by IP Address",
+      prompt: "Enter the board's IPv4 address and optional Web Workflow port",
+      placeHolder: "192.168.1.100 or 192.168.1.100:8080",
+      ignoreFocusOut: true,
+      validateInput: (value) => parseIpv4Address(value.trim())
+        ? undefined
+        : "Enter a valid IPv4 address with an optional port.",
+    });
+    if (!address) return;
+
+    const target = parseIpv4Address(address.trim());
+    if (!target) return;
+    try {
+      const device = await client.identifyDevice(target.ip, target.port);
+      discovery.addManualDevice(device);
+      await useDevice(device);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`CircuitPython Remote: ${message}`);
+    }
+  };
+
+  const selectDevice = async (): Promise<void> => {
+    const selection = await discovery.pickDevice();
+    if (selection === "manual") {
+      await connectByAddress();
+    } else if (selection) {
+      await useDevice(selection);
+    }
   };
 
   const newFile = async (entry?: RemoteEntry): Promise<void> => {
@@ -790,6 +878,7 @@ export function activate(context: vscode.ExtensionContext): void {
       () => discovery.showDevices(),
     ),
     vscode.commands.registerCommand("circuitpythonRemote.selectDevice", selectDevice),
+    vscode.commands.registerCommand("circuitpythonRemote.connectByAddress", connectByAddress),
     vscode.commands.registerCommand("circuitpythonRemote.refresh", () => tree.refresh()),
     vscode.commands.registerCommand("circuitpythonRemote.newFile", newFile),
     vscode.commands.registerCommand("circuitpythonRemote.newFolder", newFolder),

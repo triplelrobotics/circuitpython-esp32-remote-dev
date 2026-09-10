@@ -47,6 +47,10 @@
         "icon": "$(plug)"
       },
       {
+        "command": "circuitpythonRemote.connectByAddress",
+        "title": "CircuitPython Remote: Connect by IP Address"
+      },
+      {
         "command": "circuitpythonRemote.refresh",
         "title": "CircuitPython Remote: Refresh",
         "icon": "$(refresh)"
