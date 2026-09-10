@@ -57,6 +57,11 @@
         "icon": "$(new-file)"
       },
       {
+        "command": "circuitpythonRemote.newFolder",
+        "title": "CircuitPython Remote: New Folder",
+        "icon": "$(new-folder)"
+      },
+      {
         "command": "circuitpythonRemote.deleteFile",
         "title": "CircuitPython Remote: Delete File",
         "icon": "$(trash)"
@@ -99,6 +104,11 @@
           "command": "circuitpythonRemote.newFile",
           "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
           "group": "navigation@3"
+        },
+        {
+          "command": "circuitpythonRemote.newFolder",
+          "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -106,6 +116,11 @@
           "command": "circuitpythonRemote.newFile",
           "when": "view == circuitpythonRemote.files && viewItem == remoteDirectory",
           "group": "1_modification@1"
+        },
+        {
+          "command": "circuitpythonRemote.newFolder",
+          "when": "view == circuitpythonRemote.files && viewItem == remoteDirectory",
+          "group": "1_modification@2"
         },
         {
           "command": "circuitpythonRemote.deleteFile",

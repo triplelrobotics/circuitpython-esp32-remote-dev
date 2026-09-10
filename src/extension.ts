@@ -297,6 +297,13 @@ class WebWorkflowClient {
     });
   }
 
+  async createDirectory(device: CircuitPythonDevice, path: string): Promise<void> {
+    await this.request(device, path.endsWith("/") ? path : `${path}/`, {
+      method: "PUT",
+      headers: { "X-Timestamp": Date.now().toString() },
+    });
+  }
+
   async deleteFile(device: CircuitPythonDevice, path: string): Promise<void> {
     await this.request(device, path, { method: "DELETE" });
   }
@@ -482,8 +489,19 @@ class RemoteFileSystem implements vscode.FileSystemProvider {
     }
   }
 
-  createDirectory(uri: vscode.Uri): void {
-    throw vscode.FileSystemError.NoPermissions(`Creating directories is not implemented yet: ${uri.path}`);
+  async createDirectory(uri: vscode.Uri): Promise<void> {
+    const device = this.deviceFor(uri);
+    try {
+      await this.client.createDirectory(device, uri.path);
+      this.changed.fire([{ type: vscode.FileChangeType.Created, uri }]);
+      this.refreshTree();
+    } catch (error) {
+      if (error instanceof WebWorkflowError && error.status === 401) {
+        await this.client.forgetPassword(device);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      throw vscode.FileSystemError.Unavailable(`CircuitPython Remote: ${message}`);
+    }
   }
 
   async delete(uri: vscode.Uri): Promise<void> {
@@ -604,6 +622,41 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const newFolder = async (entry?: RemoteEntry): Promise<void> => {
+    const device = entry?.device ?? tree.device;
+    if (!device) {
+      void vscode.window.showInformationMessage("Select a CircuitPython device first.");
+      return;
+    }
+    const directory = entry?.isDirectory ? entry.remotePath : "/";
+    const name = await vscode.window.showInputBox({
+      title: `New folder in ${directory}`,
+      prompt: "Enter a folder name",
+      placeHolder: "folder",
+      ignoreFocusOut: true,
+      validateInput: (value) => {
+        if (!value || value !== value.trim()) return "Enter a folder name without leading or trailing spaces.";
+        if (value === "." || value === "..") return "This folder name is not allowed.";
+        if (/[\\/\0]/.test(value)) return "Enter a name only, without a path or slash.";
+        return undefined;
+      },
+    });
+    if (!name) return;
+
+    try {
+      const entries = await client.readDirectory(device, directory);
+      if (entries.some((candidate) => candidate.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+        void vscode.window.showErrorMessage(`A remote file or directory named "${name}" already exists.`);
+        return;
+      }
+
+      await remoteFiles.createDirectory(remoteUri(device, `${directory}${name}/`));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`CircuitPython Remote: ${message}`);
+    }
+  };
+
   const deleteFile = async (entry?: RemoteEntry): Promise<void> => {
     if (!entry || entry.isDirectory) return;
     const uri = remoteUri(entry.device, entry.remotePath);
@@ -715,6 +768,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("circuitpythonRemote.selectDevice", selectDevice),
     vscode.commands.registerCommand("circuitpythonRemote.refresh", () => tree.refresh()),
     vscode.commands.registerCommand("circuitpythonRemote.newFile", newFile),
+    vscode.commands.registerCommand("circuitpythonRemote.newFolder", newFolder),
     vscode.commands.registerCommand("circuitpythonRemote.deleteFile", deleteFile),
     vscode.commands.registerCommand("circuitpythonRemote.renameFile", renameFile),
     vscode.commands.registerCommand("circuitpythonRemote.openFile", async (entry: RemoteEntry) => {
