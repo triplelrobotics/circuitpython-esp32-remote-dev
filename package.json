@@ -67,6 +67,11 @@
         "icon": "$(trash)"
       },
       {
+        "command": "circuitpythonRemote.deleteFolder",
+        "title": "CircuitPython Remote: Delete Folder",
+        "icon": "$(trash)"
+      },
+      {
         "command": "circuitpythonRemote.renameFile",
         "title": "CircuitPython Remote: Rename File",
         "icon": "$(edit)"
@@ -121,6 +126,11 @@
           "command": "circuitpythonRemote.newFolder",
           "when": "view == circuitpythonRemote.files && viewItem == remoteDirectory",
           "group": "1_modification@2"
+        },
+        {
+          "command": "circuitpythonRemote.deleteFolder",
+          "when": "view == circuitpythonRemote.files && viewItem == remoteDirectory",
+          "group": "1_modification@3"
         },
         {
           "command": "circuitpythonRemote.deleteFile",

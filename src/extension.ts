@@ -440,9 +440,10 @@ class RemoteFileSystem implements vscode.FileSystemProvider {
     }
 
     const device = this.deviceFor(uri);
-    const slash = uri.path.lastIndexOf("/");
-    const parentPath = uri.path.slice(0, slash + 1);
-    const name = uri.path.slice(slash + 1);
+    const path = uri.path.endsWith("/") ? uri.path.slice(0, -1) : uri.path;
+    const slash = path.lastIndexOf("/");
+    const parentPath = path.slice(0, slash + 1);
+    const name = path.slice(slash + 1);
     const entries = await this.client.readDirectory(device, parentPath);
     const entry = entries.find((candidate) => candidate.name === name);
     if (!entry) {
@@ -508,7 +509,10 @@ class RemoteFileSystem implements vscode.FileSystemProvider {
     const device = this.deviceFor(uri);
     const file = await this.stat(uri);
     if (file.type === vscode.FileType.Directory) {
-      throw vscode.FileSystemError.NoPermissions("Deleting remote directories is not implemented yet.");
+      const entries = await this.client.readDirectory(device, uri.path);
+      if (entries.length > 0) {
+        throw vscode.FileSystemError.NoPermissions("Only empty remote directories can be deleted.");
+      }
     }
 
     try {
@@ -695,6 +699,26 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const deleteFolder = async (entry?: RemoteEntry): Promise<void> => {
+    if (!entry?.isDirectory) return;
+    const confirmation = await vscode.window.showWarningMessage(
+      `Delete empty remote folder "${entry.remotePath}"?`,
+      {
+        modal: true,
+        detail: "Non-empty folders will not be deleted. This action cannot be undone.",
+      },
+      "Delete",
+    );
+    if (confirmation !== "Delete") return;
+
+    try {
+      await remoteFiles.delete(remoteUri(entry.device, entry.remotePath));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`CircuitPython Remote: ${message}`);
+    }
+  };
+
   const renameFile = async (entry?: RemoteEntry): Promise<void> => {
     if (!entry || entry.isDirectory) return;
     const oldUri = remoteUri(entry.device, entry.remotePath);
@@ -770,6 +794,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("circuitpythonRemote.newFile", newFile),
     vscode.commands.registerCommand("circuitpythonRemote.newFolder", newFolder),
     vscode.commands.registerCommand("circuitpythonRemote.deleteFile", deleteFile),
+    vscode.commands.registerCommand("circuitpythonRemote.deleteFolder", deleteFolder),
     vscode.commands.registerCommand("circuitpythonRemote.renameFile", renameFile),
     vscode.commands.registerCommand("circuitpythonRemote.openFile", async (entry: RemoteEntry) => {
       if (isKnownBinaryPath(entry.remotePath)) {
