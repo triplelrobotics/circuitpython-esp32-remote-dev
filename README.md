@@ -38,11 +38,16 @@ Found a problem or have an idea?
 
 - Discover `_circuitpython._tcp.local` devices over mDNS, including on Macs
   with multiple active network interfaces.
+- Connect directly using a board's IPv4 address when mDNS discovery is
+  unavailable.
 - Browse and refresh the remote filesystem through the Web Workflow `/fs/`
   API.
 - Open, edit, save, create, delete, and rename individual text files.
+- Create and rename directories, and delete empty directories.
+- Upload individual local files and download individual remote files.
 - Protect known binary formats such as `.mpy`, firmware, images, audio, fonts,
-  and archives from accidental text writes.
+  and archives from accidental text writes while still allowing binary upload
+  and download.
 - Store Web Workflow passwords in VS Code Secret Storage.
 
 ## ESP32 setup
@@ -74,19 +79,27 @@ curl --max-time 5 http://192.168.1.100/cp/version.json
 ```
 
 If the request succeeds but discovery does not, check that mDNS/Bonjour traffic
-is allowed between Wi-Fi and Ethernet clients.
+is allowed between Wi-Fi and Ethernet clients, or use **Connect by IP Address**
+in the extension.
 
 ## Use the extension
 
 1. Open **CircuitPython Remote** in the Explorer sidebar.
-2. Click the plug icon and select a discovered board.
+2. Click the plug icon and select a discovered board, or choose **Connect by IP
+   Address** and enter an address such as `192.168.1.100`.
 3. Enter its `CIRCUITPY_WEB_API_PASSWORD`.
 4. Browse the tree or use its toolbar and context menus to manage files.
 5. Click the refresh icon to reload the remote filesystem.
 
 Selecting a text file opens it in an editor backed by the ESP32. Saving the
 editor writes the complete file to the device. Binary files remain visible but
-cannot be opened or saved as text.
+cannot be opened or saved as text. They can still be uploaded and downloaded
+without modification.
+
+Use the tree toolbar to create files or folders and upload a file to the remote
+root. Right-click a directory to create content inside it, upload a file, rename
+it, or delete it when empty. Right-click a file to rename, delete, or download
+it. Uploading over an existing file requires confirmation.
 
 Errors and discovery details are available under **View → Output →
 CircuitPython Remote**. Authentication failures offer a password retry.
@@ -106,8 +119,9 @@ CircuitPython: 192.168.x.x
 
 ## Current limitations
 
-The extension does not yet support directory creation, deletion, or renaming;
-file uploads; serial or REPL access; firmware flashing; project templates; or
-AI features.
+The extension does not yet support recursive directory deletion, directory
+upload or download, batch transfers, moving files between directories, or
+atomic recovery from interrupted uploads. Serial or REPL access, firmware
+flashing, project templates, and AI features are outside its current scope.
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.

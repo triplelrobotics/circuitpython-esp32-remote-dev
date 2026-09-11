@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Connect directly using a board's IPv4 address when mDNS discovery is
+  unavailable.
+- Create and rename remote directories, and delete empty remote directories.
+- Upload individual local files to the remote root or a selected directory,
+  with confirmation before overwriting an existing file.
+- Download individual remote text or binary files while preserving their
+  original names.
+
 ## 0.0.2 - 2026-08-24
 
 - Browse CircuitPython devices across multiple active IPv4 interfaces.
