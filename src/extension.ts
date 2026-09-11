@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { networkInterfaces } from "os";
+import { homedir, networkInterfaces } from "os";
 import { Bonjour, Browser, Service, ServiceConfig } from "bonjour-service";
 
 interface CircuitPythonDevice {
@@ -787,6 +787,35 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const downloadFile = async (entry?: RemoteEntry): Promise<void> => {
+    if (!entry || entry.isDirectory) return;
+    const name = entry.remotePath.slice(entry.remotePath.lastIndexOf("/") + 1);
+    const workspaceFolder = vscode.workspace.workspaceFolders?.find(
+      (folder) => folder.uri.scheme === "file",
+    );
+    const defaultDirectory = workspaceFolder?.uri ?? vscode.Uri.file(homedir());
+    const destination = await vscode.window.showSaveDialog({
+      title: `Download ${entry.remotePath}`,
+      saveLabel: "Download",
+      defaultUri: vscode.Uri.joinPath(defaultDirectory, name),
+    });
+    if (!destination) return;
+
+    try {
+      const content = await client.readFile(entry.device, entry.remotePath);
+      await vscode.workspace.fs.writeFile(destination, content);
+      void vscode.window.showInformationMessage(
+        `Downloaded ${entry.remotePath} to ${destination.fsPath}.`,
+      );
+    } catch (error) {
+      if (error instanceof WebWorkflowError && error.status === 401) {
+        await client.forgetPassword(entry.device);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`CircuitPython Remote: ${message}`);
+    }
+  };
+
   const deleteFolder = async (entry?: RemoteEntry): Promise<void> => {
     if (!entry?.isDirectory) return;
     const confirmation = await vscode.window.showWarningMessage(
@@ -883,6 +912,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("circuitpythonRemote.newFile", newFile),
     vscode.commands.registerCommand("circuitpythonRemote.newFolder", newFolder),
     vscode.commands.registerCommand("circuitpythonRemote.deleteFile", deleteFile),
+    vscode.commands.registerCommand("circuitpythonRemote.downloadFile", downloadFile),
     vscode.commands.registerCommand("circuitpythonRemote.deleteFolder", deleteFolder),
     vscode.commands.registerCommand("circuitpythonRemote.renameFile", renameFile),
     vscode.commands.registerCommand("circuitpythonRemote.openFile", async (entry: RemoteEntry) => {

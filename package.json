@@ -71,6 +71,11 @@
         "icon": "$(trash)"
       },
       {
+        "command": "circuitpythonRemote.downloadFile",
+        "title": "CircuitPython Remote: Download File",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "circuitpythonRemote.deleteFolder",
         "title": "CircuitPython Remote: Delete Folder",
         "icon": "$(trash)"
@@ -145,6 +150,11 @@
           "command": "circuitpythonRemote.renameFile",
           "when": "view == circuitpythonRemote.files && viewItem == remoteFile",
           "group": "1_modification@1"
+        },
+        {
+          "command": "circuitpythonRemote.downloadFile",
+          "when": "view == circuitpythonRemote.files && viewItem == remoteFile",
+          "group": "2_transfer@1"
         }
       ]
     }
