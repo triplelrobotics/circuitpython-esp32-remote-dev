@@ -76,6 +76,11 @@
         "icon": "$(cloud-download)"
       },
       {
+        "command": "circuitpythonRemote.uploadFile",
+        "title": "CircuitPython Remote: Upload File",
+        "icon": "$(cloud-upload)"
+      },
+      {
         "command": "circuitpythonRemote.deleteFolder",
         "title": "CircuitPython Remote: Delete Folder",
         "icon": "$(trash)"
@@ -123,6 +128,11 @@
           "command": "circuitpythonRemote.newFolder",
           "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
           "group": "navigation@4"
+        },
+        {
+          "command": "circuitpythonRemote.uploadFile",
+          "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
+          "group": "navigation@5"
         }
       ],
       "view/item/context": [
@@ -140,6 +150,11 @@
           "command": "circuitpythonRemote.deleteFolder",
           "when": "view == circuitpythonRemote.files && viewItem == remoteDirectory",
           "group": "1_modification@3"
+        },
+        {
+          "command": "circuitpythonRemote.uploadFile",
+          "when": "view == circuitpythonRemote.files && viewItem == remoteDirectory",
+          "group": "2_transfer@1"
         },
         {
           "command": "circuitpythonRemote.deleteFile",
