@@ -599,10 +599,6 @@ class RemoteFileSystem implements vscode.FileSystemProvider {
     if (this.deviceFor(newUri).key !== device.key) {
       throw vscode.FileSystemError.NoPermissions("Moving files between devices is not supported.");
     }
-    const file = await this.stat(oldUri);
-    if (file.type === vscode.FileType.Directory) {
-      throw vscode.FileSystemError.NoPermissions("Renaming remote directories is not implemented yet.");
-    }
 
     try {
       await this.client.moveFile(device, oldUri.path, newUri.path);
@@ -980,6 +976,59 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const renameFolder = async (entry?: RemoteEntry): Promise<void> => {
+    if (!entry?.isDirectory) return;
+    const openTab = vscode.window.tabGroups.all.flatMap((group) => group.tabs).find(
+      (tab) => tab.input instanceof vscode.TabInputText
+        && tab.input.uri.scheme === "circuitpython-remote"
+        && tab.input.uri.query === remoteUri(entry.device, "/").query
+        && tab.input.uri.path.startsWith(entry.remotePath),
+    );
+    if (openTab) {
+      void vscode.window.showWarningMessage(
+        `Close files opened from ${entry.remotePath} before renaming the folder.`,
+      );
+      return;
+    }
+
+    const oldPath = entry.remotePath.slice(0, -1);
+    const slash = oldPath.lastIndexOf("/");
+    const directory = oldPath.slice(0, slash + 1);
+    const oldName = oldPath.slice(slash + 1);
+    const newName = await vscode.window.showInputBox({
+      title: `Rename ${entry.remotePath}`,
+      prompt: "Enter a new folder name",
+      value: oldName,
+      valueSelection: [0, oldName.length],
+      ignoreFocusOut: true,
+      validateInput: (value) => {
+        if (!value || value !== value.trim()) return "Enter a folder name without leading or trailing spaces.";
+        if (value === "." || value === "..") return "This folder name is not allowed.";
+        if (/[\\/\0]/.test(value)) return "Enter a name only, without a path or slash.";
+        if (value === oldName) return "Enter a different folder name.";
+        return undefined;
+      },
+    });
+    if (!newName) return;
+
+    try {
+      const entries = await client.readDirectory(entry.device, directory);
+      if (entries.some((candidate) => candidate.name !== oldName
+        && candidate.name.toLocaleLowerCase() === newName.toLocaleLowerCase())) {
+        void vscode.window.showErrorMessage(`A remote file or directory named "${newName}" already exists.`);
+        return;
+      }
+
+      await remoteFiles.rename(
+        remoteUri(entry.device, entry.remotePath),
+        remoteUri(entry.device, `${directory}${newName}/`),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`CircuitPython Remote: ${message}`);
+    }
+  };
+
   context.subscriptions.push(
     output, discovery, treeView,
     vscode.workspace.registerFileSystemProvider("circuitpython-remote", remoteFiles, {
@@ -999,6 +1048,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("circuitpythonRemote.uploadFile", uploadFile),
     vscode.commands.registerCommand("circuitpythonRemote.deleteFolder", deleteFolder),
     vscode.commands.registerCommand("circuitpythonRemote.renameFile", renameFile),
+    vscode.commands.registerCommand("circuitpythonRemote.renameFolder", renameFolder),
     vscode.commands.registerCommand("circuitpythonRemote.openFile", async (entry: RemoteEntry) => {
       if (isKnownBinaryPath(entry.remotePath)) {
         void vscode.window.showWarningMessage(

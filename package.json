@@ -89,6 +89,11 @@
         "command": "circuitpythonRemote.renameFile",
         "title": "CircuitPython Remote: Rename File",
         "icon": "$(edit)"
+      },
+      {
+        "command": "circuitpythonRemote.renameFolder",
+        "title": "CircuitPython Remote: Rename Folder",
+        "icon": "$(edit)"
       }
     ],
     "views": {
@@ -148,6 +153,11 @@
         },
         {
           "command": "circuitpythonRemote.deleteFolder",
+          "when": "view == circuitpythonRemote.files && viewItem == remoteDirectory",
+          "group": "1_modification@4"
+        },
+        {
+          "command": "circuitpythonRemote.renameFolder",
           "when": "view == circuitpythonRemote.files && viewItem == remoteDirectory",
           "group": "1_modification@3"
         },
