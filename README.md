@@ -5,9 +5,9 @@ devices and editing their files over Wi-Fi.
 
 ## Beta release
 
-CircuitPython Remote 0.0.2 is available for early testing on macOS.
+CircuitPython Remote 0.0.3 is available for early testing on macOS.
 
-[Download the latest beta](https://github.com/triplelrobotics/circuitpython-esp32-remote-dev/releases/tag/v0.0.2)
+[Download the latest beta](https://github.com/triplelrobotics/circuitpython-esp32-remote-dev/releases/tag/v0.0.3)
 
 Back up important files on the board before testing remote write and delete
 operations.

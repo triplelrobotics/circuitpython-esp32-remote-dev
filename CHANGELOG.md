@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.3 - 2026-09-11
 
 - Connect directly using a board's IPv4 address when mDNS discovery is
   unavailable.
