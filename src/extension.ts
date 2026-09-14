@@ -40,6 +40,23 @@ function isKnownBinaryPath(path: string): boolean {
   return dot >= 0 && binaryFileExtensions.has(name.slice(dot).toLocaleLowerCase());
 }
 
+function isSystemMetadataName(name: string): boolean {
+  return name === ".DS_Store"
+    || name === ".Trashes"
+    || name === ".Spotlight-V100"
+    || name === ".fseventsd"
+    || name === ".metadata_never_index"
+    || name.startsWith(".Trash-")
+    || name.startsWith("._");
+}
+
+function isSafeRemoteName(name: string): boolean {
+  return name.length > 0
+    && name !== "."
+    && name !== ".."
+    && !/[\\/\0]/.test(name);
+}
+
 interface DirectoryEntry {
   name: string;
   directory: boolean;
@@ -55,6 +72,13 @@ interface VersionResponse {
   web_api_version?: number;
   board_name?: string;
   hostname?: string;
+}
+
+interface ProjectDownloadSummary {
+  files: number;
+  directories: number;
+  skipped: number;
+  includesSettings: boolean;
 }
 
 interface DeviceQuickPickItem extends vscode.QuickPickItem {
@@ -939,6 +963,110 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const createLocalProject = async (): Promise<void> => {
+    const device = tree.device;
+    if (!device) {
+      void vscode.window.showInformationMessage("Select a CircuitPython device first.");
+      return;
+    }
+
+    const selected = await vscode.window.showOpenDialog({
+      title: `Create a local project from ${device.name}`,
+      openLabel: "Select Empty Folder",
+      defaultUri: vscode.Uri.file(homedir()),
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+    });
+    const destination = selected?.[0];
+    if (!destination) return;
+    if (destination.scheme !== "file") {
+      void vscode.window.showErrorMessage("Select a folder on the local filesystem.");
+      return;
+    }
+
+    try {
+      const localEntries = await vscode.workspace.fs.readDirectory(destination);
+      const existing = localEntries.filter(([name]) => !isSystemMetadataName(name));
+      if (existing.length > 0) {
+        void vscode.window.showErrorMessage(
+          "The selected folder is not empty. Choose an empty folder to avoid overwriting local files.",
+        );
+        return;
+      }
+
+      const summary: ProjectDownloadSummary = {
+        files: 0,
+        directories: 0,
+        skipped: 0,
+        includesSettings: false,
+      };
+      await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `Downloading project from ${device.name}`,
+        cancellable: true,
+      }, async (progress, token) => {
+        const downloadDirectory = async (remotePath: string, localDirectory: vscode.Uri): Promise<void> => {
+          const entries = await client.readDirectory(device, remotePath);
+          for (const entry of entries) {
+            if (token.isCancellationRequested) throw new vscode.CancellationError();
+            if (!isSafeRemoteName(entry.name)) {
+              throw new WebWorkflowError(`The device returned an unsafe file name in ${remotePath}.`);
+            }
+            if (isSystemMetadataName(entry.name)) {
+              summary.skipped += 1;
+              output.appendLine(`Skipped system metadata: ${remotePath}${entry.name}`);
+              continue;
+            }
+
+            const remoteEntryPath = `${remotePath}${entry.name}${entry.directory ? "/" : ""}`;
+            const localEntry = vscode.Uri.joinPath(localDirectory, entry.name);
+            progress.report({ message: remoteEntryPath });
+            if (entry.directory) {
+              await vscode.workspace.fs.createDirectory(localEntry);
+              summary.directories += 1;
+              await downloadDirectory(remoteEntryPath, localEntry);
+            } else {
+              const content = await client.readFile(device, remoteEntryPath);
+              await vscode.workspace.fs.writeFile(localEntry, content);
+              summary.files += 1;
+              if (remoteEntryPath === "/settings.toml") summary.includesSettings = true;
+            }
+          }
+        };
+
+        await downloadDirectory("/", destination);
+      });
+
+      if (summary.includesSettings) {
+        await vscode.window.showWarningMessage(
+          "The local project contains settings.toml, which may include Wi-Fi and Web Workflow passwords. Keep it private and do not commit it to a public repository.",
+        );
+      }
+      const openFolder = await vscode.window.showInformationMessage(
+        `Downloaded ${summary.files} files and ${summary.directories} folders from ${device.name}. Skipped ${summary.skipped} system metadata items.`,
+        "Open Folder",
+      );
+      if (openFolder === "Open Folder") {
+        await vscode.commands.executeCommand("vscode.openFolder", destination, true);
+      }
+    } catch (error) {
+      if (error instanceof vscode.CancellationError) {
+        void vscode.window.showWarningMessage(
+          `Project download cancelled. Partially downloaded files remain in ${destination.fsPath}.`,
+        );
+        return;
+      }
+      if (error instanceof WebWorkflowError && error.status === 401) {
+        await client.forgetPassword(device);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(
+        `CircuitPython Remote: Project download stopped. Partial files may remain in ${destination.fsPath}. ${message}`,
+      );
+    }
+  };
+
   const newFile = async (entry?: RemoteEntry): Promise<void> => {
     const device = entry?.device ?? tree.device;
     if (!device) {
@@ -1291,6 +1419,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("circuitpythonRemote.refresh", () => tree.refresh()),
     vscode.commands.registerCommand("circuitpythonRemote.showOutput", showOutput),
     vscode.commands.registerCommand("circuitpythonRemote.reloadAndRun", reloadAndRun),
+    vscode.commands.registerCommand("circuitpythonRemote.createLocalProject", createLocalProject),
     vscode.commands.registerCommand("circuitpythonRemote.newFile", newFile),
     vscode.commands.registerCommand("circuitpythonRemote.newFolder", newFolder),
     vscode.commands.registerCommand("circuitpythonRemote.deleteFile", deleteFile),
