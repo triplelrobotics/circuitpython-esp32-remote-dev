@@ -56,6 +56,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "circuitpythonRemote.showOutput",
+        "title": "CircuitPython Remote: Show Output",
+        "icon": "$(output)"
+      },
+      {
         "command": "circuitpythonRemote.newFile",
         "title": "CircuitPython Remote: New File",
         "icon": "$(new-file)"

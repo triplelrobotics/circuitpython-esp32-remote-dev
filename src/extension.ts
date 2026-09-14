@@ -1,6 +1,10 @@
 import * as vscode from "vscode";
 import { homedir, networkInterfaces } from "os";
 import { basename } from "path";
+import { request as httpRequest } from "http";
+import { randomBytes } from "crypto";
+import { Duplex } from "stream";
+import { StringDecoder } from "string_decoder";
 import { Bonjour, Browser, Service, ServiceConfig } from "bonjour-service";
 
 interface CircuitPythonDevice {
@@ -265,8 +269,18 @@ class CircuitPythonDiscovery implements vscode.Disposable {
   }
 }
 
-class WebWorkflowClient {
-  constructor(private readonly secrets: vscode.SecretStorage, private readonly output: vscode.OutputChannel) {}
+class WebWorkflowClient implements vscode.Disposable {
+  private consoleSocket: Duplex | undefined;
+  private consoleDeviceKey: string | undefined;
+  private consoleBuffer = Buffer.alloc(0);
+  private consoleDecoder = new StringDecoder("utf8");
+  private consoleEscapeState: "normal" | "escape" | "csi" | "osc" | "oscEscape" = "normal";
+
+  constructor(
+    private readonly secrets: vscode.SecretStorage,
+    private readonly output: vscode.OutputChannel,
+    private readonly consoleOutput: vscode.OutputChannel,
+  ) {}
 
   async identifyDevice(ip: string, port: number): Promise<CircuitPythonDevice> {
     const url = `http://${ip}:${port}/cp/version.json`;
@@ -363,6 +377,100 @@ class WebWorkflowClient {
     });
   }
 
+  async connectOutput(device: CircuitPythonDevice): Promise<void> {
+    if (this.consoleDeviceKey === device.key
+      && this.consoleSocket
+      && !this.consoleSocket.destroyed) return;
+    this.disconnectOutput();
+
+    const password = await this.secrets.get(this.secretKey(device));
+    if (!password) throw new WebWorkflowError("No Web Workflow password is available.", 401);
+
+    const authorization = `Basic ${Buffer.from(`:${password}`).toString("base64")}`;
+    const webSocketKey = randomBytes(16).toString("base64");
+    const origin = `http://${device.ip}${device.port === 80 ? "" : `:${device.port}`}`;
+    this.output.appendLine(`WebSocket http://${device.ip}:${device.port}/cp/serial/`);
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        error ? reject(error) : resolve();
+      };
+      const request = httpRequest({
+        host: device.ip,
+        port: device.port,
+        path: "/cp/serial/",
+        headers: {
+          Authorization: authorization,
+          Connection: "Upgrade",
+          Origin: origin,
+          Upgrade: "websocket",
+          "Sec-WebSocket-Key": webSocketKey,
+          "Sec-WebSocket-Version": "13",
+        },
+      });
+
+      request.setTimeout(10_000, () => {
+        request.destroy();
+        finish(new WebWorkflowError(`Unable to reach ${device.ip}:${device.port}: connection timed out.`));
+      });
+      request.on("response", (response) => {
+        response.resume();
+        if (response.statusCode === 401) {
+          finish(new WebWorkflowError("Incorrect Web Workflow password.", 401));
+        } else if (response.statusCode === 403) {
+          finish(new WebWorkflowError("The device rejected the wireless output connection (HTTP 403).", 403));
+        } else {
+          finish(new WebWorkflowError(`The device did not accept the WebSocket connection (HTTP ${response.statusCode ?? "unknown"}).`, response.statusCode));
+        }
+      });
+      request.on("upgrade", (_response, socket, head) => {
+        socket.setTimeout(0);
+        this.consoleSocket = socket;
+        this.consoleDeviceKey = device.key;
+        this.consoleBuffer = Buffer.alloc(0);
+        socket.on("data", (chunk: Buffer) => this.receiveConsoleData(chunk));
+        socket.on("error", (error) => {
+          this.consoleOutput.appendLine(`\n[Wireless output error: ${error.message}]`);
+        });
+        socket.on("close", () => {
+          if (this.consoleSocket !== socket) return;
+          this.consoleSocket = undefined;
+          this.consoleDeviceKey = undefined;
+          this.consoleOutput.appendLine("\n[Wireless output disconnected]");
+        });
+        this.consoleOutput.appendLine(`\n[Connected to ${device.name} at ${device.ip}:${device.port}]`);
+        if (head.length > 0) this.receiveConsoleData(head);
+        finish();
+      });
+      request.on("error", (error) => {
+        finish(new WebWorkflowError(`Unable to reach ${device.ip}:${device.port}: ${error.message}`));
+      });
+      request.end();
+    });
+  }
+
+  showOutput(): void {
+    this.consoleOutput.show(true);
+  }
+
+  disconnectOutput(): void {
+    this.consoleSocket?.destroy();
+    this.consoleSocket = undefined;
+    this.consoleDeviceKey = undefined;
+    this.consoleBuffer = Buffer.alloc(0);
+    this.consoleDecoder.end();
+    this.consoleDecoder = new StringDecoder("utf8");
+    this.consoleEscapeState = "normal";
+  }
+
+  dispose(): void {
+    this.disconnectOutput();
+    this.consoleOutput.dispose();
+  }
+
   async forgetPassword(device: CircuitPythonDevice): Promise<void> {
     await this.secrets.delete(this.secretKey(device));
   }
@@ -402,6 +510,91 @@ class WebWorkflowClient {
   private apiPath(path: string): string {
     const encoded = path.split("/").map(encodeURIComponent).join("/");
     return `/fs${encoded.startsWith("/") ? encoded : `/${encoded}`}`;
+  }
+
+  private receiveConsoleData(chunk: Buffer): void {
+    this.consoleBuffer = Buffer.concat([this.consoleBuffer, chunk]);
+    while (this.consoleBuffer.length >= 2) {
+      const first = this.consoleBuffer[0];
+      const second = this.consoleBuffer[1];
+      let length = second & 0x7f;
+      let offset = 2;
+      if (length === 126) {
+        if (this.consoleBuffer.length < 4) return;
+        length = this.consoleBuffer.readUInt16BE(2);
+        offset = 4;
+      } else if (length === 127) {
+        if (this.consoleBuffer.length < 10) return;
+        const largeLength = this.consoleBuffer.readBigUInt64BE(2);
+        if (largeLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+          this.consoleSocket?.destroy(new Error("WebSocket frame is too large."));
+          return;
+        }
+        length = Number(largeLength);
+        offset = 10;
+      }
+
+      const masked = (second & 0x80) !== 0;
+      const maskLength = masked ? 4 : 0;
+      if (this.consoleBuffer.length < offset + maskLength + length) return;
+      const mask = masked ? this.consoleBuffer.subarray(offset, offset + 4) : undefined;
+      offset += maskLength;
+      const payload = Buffer.from(this.consoleBuffer.subarray(offset, offset + length));
+      this.consoleBuffer = this.consoleBuffer.subarray(offset + length);
+      if (mask) {
+        for (let index = 0; index < payload.length; index += 1) {
+          payload[index] ^= mask[index % 4];
+        }
+      }
+
+      const opcode = first & 0x0f;
+      if (opcode === 0x8) {
+        this.consoleSocket?.destroy();
+      } else if (opcode === 0x9) {
+        this.consoleSocket?.write(this.webSocketFrame(payload, 0xA));
+      } else if (opcode === 0x0 || opcode === 0x1 || opcode === 0x2) {
+        this.consoleOutput.append(this.stripConsoleSequences(this.consoleDecoder.write(payload)));
+      }
+    }
+  }
+
+  private stripConsoleSequences(text: string): string {
+    let visible = "";
+    for (const character of text) {
+      if (this.consoleEscapeState === "normal") {
+        if (character === "\x1b") this.consoleEscapeState = "escape";
+        else if (character === "\x9b") this.consoleEscapeState = "csi";
+        else visible += character;
+      } else if (this.consoleEscapeState === "escape") {
+        if (character === "[") this.consoleEscapeState = "csi";
+        else if (character === "]") this.consoleEscapeState = "osc";
+        else this.consoleEscapeState = "normal";
+      } else if (this.consoleEscapeState === "csi") {
+        const code = character.charCodeAt(0);
+        if (code >= 0x40 && code <= 0x7e) this.consoleEscapeState = "normal";
+      } else if (this.consoleEscapeState === "osc") {
+        if (character === "\x07") this.consoleEscapeState = "normal";
+        else if (character === "\x1b") this.consoleEscapeState = "oscEscape";
+      } else if (character === "\\") {
+        this.consoleEscapeState = "normal";
+      } else if (character !== "\x1b") {
+        this.consoleEscapeState = "osc";
+      }
+    }
+    return visible;
+  }
+
+  private webSocketFrame(payload: Buffer, opcode: number): Buffer {
+    if (payload.length > 125) throw new WebWorkflowError("WebSocket command is too large.");
+    const mask = randomBytes(4);
+    const frame = Buffer.alloc(6 + payload.length);
+    frame[0] = 0x80 | opcode;
+    frame[1] = 0x80 | payload.length;
+    mask.copy(frame, 2);
+    for (let index = 0; index < payload.length; index += 1) {
+      frame[6 + index] = payload[index] ^ mask[index % 4];
+    }
+    return frame;
   }
 
   private secretKey(device: CircuitPythonDevice): string {
@@ -645,14 +838,16 @@ function parseIpv4Address(value: string): { ip: string; port: number } | undefin
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("CircuitPython Remote");
+  const consoleOutput = vscode.window.createOutputChannel("CircuitPython Output");
   const discovery = new CircuitPythonDiscovery(output);
-  const client = new WebWorkflowClient(context.secrets, output);
+  const client = new WebWorkflowClient(context.secrets, output, consoleOutput);
   const tree = new RemoteFileTree(client, output);
   const treeView = vscode.window.createTreeView("circuitpythonRemote.files", { treeDataProvider: tree, showCollapseAll: true });
   const remoteFiles = new RemoteFileSystem(discovery, client, () => tree.refresh());
 
   const useDevice = async (device: CircuitPythonDevice): Promise<void> => {
     if (!(await client.ensurePassword(device))) return;
+    if (tree.device?.key !== device.key) client.disconnectOutput();
     tree.selectDevice(device);
     treeView.title = `CircuitPython: ${device.name}`;
     void vscode.commands.executeCommand("setContext", "circuitpythonRemote.deviceSelected", true);
@@ -688,6 +883,25 @@ export function activate(context: vscode.ExtensionContext): void {
       await connectByAddress();
     } else if (selection) {
       await useDevice(selection);
+    }
+  };
+
+  const showOutput = async (): Promise<void> => {
+    const device = tree.device;
+    if (!device) {
+      void vscode.window.showInformationMessage("Select a CircuitPython device first.");
+      return;
+    }
+
+    client.showOutput();
+    try {
+      await client.connectOutput(device);
+    } catch (error) {
+      if (error instanceof WebWorkflowError && error.status === 401) {
+        await client.forgetPassword(device);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`CircuitPython Remote: ${message}`);
     }
   };
 
@@ -1030,7 +1244,7 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   context.subscriptions.push(
-    output, discovery, treeView,
+    output, discovery, client, treeView,
     vscode.workspace.registerFileSystemProvider("circuitpython-remote", remoteFiles, {
       isCaseSensitive: true,
     }),
@@ -1041,6 +1255,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("circuitpythonRemote.selectDevice", selectDevice),
     vscode.commands.registerCommand("circuitpythonRemote.connectByAddress", connectByAddress),
     vscode.commands.registerCommand("circuitpythonRemote.refresh", () => tree.refresh()),
+    vscode.commands.registerCommand("circuitpythonRemote.showOutput", showOutput),
     vscode.commands.registerCommand("circuitpythonRemote.newFile", newFile),
     vscode.commands.registerCommand("circuitpythonRemote.newFolder", newFolder),
     vscode.commands.registerCommand("circuitpythonRemote.deleteFile", deleteFile),
