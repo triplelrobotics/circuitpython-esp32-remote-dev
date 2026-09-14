@@ -63,17 +63,17 @@
       {
         "command": "circuitpythonRemote.reloadAndRun",
         "title": "CircuitPython Remote: Reload and Run",
-        "icon": "$(debug-restart)"
+        "icon": "$(run-compact)"
       },
       {
         "command": "circuitpythonRemote.createLocalProject",
         "title": "CircuitPython Remote: Create Local Project from Device",
-        "icon": "$(desktop-download)"
+        "icon": "$(arrow-circle-down)"
       },
       {
         "command": "circuitpythonRemote.syncLocalProject",
         "title": "CircuitPython Remote: Sync Local Project to Device",
-        "icon": "$(sync)"
+        "icon": "$(arrow-circle-up)"
       },
       {
         "command": "circuitpythonRemote.newFile",
