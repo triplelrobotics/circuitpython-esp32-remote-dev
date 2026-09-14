@@ -452,6 +452,13 @@ class WebWorkflowClient implements vscode.Disposable {
     });
   }
 
+  async reloadAndRun(device: CircuitPythonDevice): Promise<void> {
+    await this.connectOutput(device);
+    this.sendConsoleText("\x03");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    this.sendConsoleText("\x04");
+  }
+
   showOutput(): void {
     this.consoleOutput.show(true);
   }
@@ -582,6 +589,13 @@ class WebWorkflowClient implements vscode.Disposable {
       }
     }
     return visible;
+  }
+
+  private sendConsoleText(text: string): void {
+    if (!this.consoleSocket || this.consoleSocket.destroyed) {
+      throw new WebWorkflowError("The wireless output connection is not open.");
+    }
+    this.consoleSocket.write(this.webSocketFrame(Buffer.from(text, "utf8"), 0x1));
   }
 
   private webSocketFrame(payload: Buffer, opcode: number): Buffer {
@@ -896,6 +910,26 @@ export function activate(context: vscode.ExtensionContext): void {
     client.showOutput();
     try {
       await client.connectOutput(device);
+    } catch (error) {
+      if (error instanceof WebWorkflowError && error.status === 401) {
+        await client.forgetPassword(device);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`CircuitPython Remote: ${message}`);
+    }
+  };
+
+  const reloadAndRun = async (): Promise<void> => {
+    const device = tree.device;
+    if (!device) {
+      void vscode.window.showInformationMessage("Select a CircuitPython device first.");
+      return;
+    }
+
+    client.showOutput();
+    try {
+      await client.reloadAndRun(device);
+      void vscode.window.showInformationMessage(`Reload requested for ${device.name}.`);
     } catch (error) {
       if (error instanceof WebWorkflowError && error.status === 401) {
         await client.forgetPassword(device);
@@ -1256,6 +1290,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("circuitpythonRemote.connectByAddress", connectByAddress),
     vscode.commands.registerCommand("circuitpythonRemote.refresh", () => tree.refresh()),
     vscode.commands.registerCommand("circuitpythonRemote.showOutput", showOutput),
+    vscode.commands.registerCommand("circuitpythonRemote.reloadAndRun", reloadAndRun),
     vscode.commands.registerCommand("circuitpythonRemote.newFile", newFile),
     vscode.commands.registerCommand("circuitpythonRemote.newFolder", newFolder),
     vscode.commands.registerCommand("circuitpythonRemote.deleteFile", deleteFile),

@@ -61,6 +61,11 @@
         "icon": "$(output)"
       },
       {
+        "command": "circuitpythonRemote.reloadAndRun",
+        "title": "CircuitPython Remote: Reload and Run",
+        "icon": "$(debug-restart)"
+      },
+      {
         "command": "circuitpythonRemote.newFile",
         "title": "CircuitPython Remote: New File",
         "icon": "$(new-file)"
@@ -143,6 +148,11 @@
           "command": "circuitpythonRemote.uploadFile",
           "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
           "group": "navigation@5"
+        },
+        {
+          "command": "circuitpythonRemote.reloadAndRun",
+          "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
+          "group": "navigation@6"
         }
       ],
       "view/item/context": [
