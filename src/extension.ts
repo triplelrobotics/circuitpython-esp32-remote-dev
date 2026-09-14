@@ -81,6 +81,35 @@ interface ProjectDownloadSummary {
   includesSettings: boolean;
 }
 
+interface ProjectSyncCandidate {
+  path: string;
+  localUri: vscode.Uri;
+  content: Uint8Array;
+  status: "new" | "modified";
+  binary: boolean;
+  remoteSize?: number;
+}
+
+interface ProjectSyncQuickPickItem extends vscode.QuickPickItem {
+  candidate: ProjectSyncCandidate;
+}
+
+function isLocalProjectMetadata(path: string, name: string, directory: boolean): boolean {
+  if (isSystemMetadataName(name)) return true;
+  if (directory && (name === ".git" || name === ".vscode"
+    || name === "node_modules" || name === "__pycache__")) return true;
+  return path === "/boot_out.txt"
+    || name === ".gitignore"
+    || name === ".circuitpythonignore"
+    || name.toLocaleLowerCase().endsWith(".vsix");
+}
+
+function formatByteCount(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KiB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 interface DeviceQuickPickItem extends vscode.QuickPickItem {
   device?: CircuitPythonDevice;
   manual: boolean;
@@ -1067,6 +1096,267 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const syncLocalProject = async (): Promise<void> => {
+    const device = tree.device;
+    if (!device) {
+      void vscode.window.showInformationMessage("Select a CircuitPython device first.");
+      return;
+    }
+
+    const localFolders = vscode.workspace.workspaceFolders?.filter(
+      (folder) => folder.uri.scheme === "file",
+    ) ?? [];
+    let localFolder = localFolders[0];
+    if (localFolders.length === 0) {
+      void vscode.window.showInformationMessage("Open a local CircuitPython project folder first.");
+      return;
+    }
+    if (localFolders.length > 1) {
+      const selected = await vscode.window.showQuickPick(
+        localFolders.map((folder) => ({
+          label: folder.name,
+          description: folder.uri.fsPath,
+          folder,
+        })),
+        { placeHolder: "Select the local project to sync" },
+      );
+      if (!selected) return;
+      localFolder = selected.folder;
+    }
+
+    try {
+      const remoteFiles = new Map<string, DirectoryEntry>();
+      const remoteDirectories = new Set<string>(["/"]);
+      const candidates: ProjectSyncCandidate[] = [];
+      await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `Comparing ${localFolder.name} with ${device.name}`,
+        cancellable: true,
+      }, async (progress, token) => {
+        const scanRemote = async (remotePath: string): Promise<void> => {
+          const entries = await client.readDirectory(device, remotePath);
+          for (const entry of entries) {
+            if (token.isCancellationRequested) throw new vscode.CancellationError();
+            if (!isSafeRemoteName(entry.name)) {
+              throw new WebWorkflowError(`The device returned an unsafe file name in ${remotePath}.`);
+            }
+            if (isSystemMetadataName(entry.name)) continue;
+            const path = `${remotePath}${entry.name}${entry.directory ? "/" : ""}`;
+            progress.report({ message: path });
+            if (entry.directory) {
+              remoteDirectories.add(path);
+              await scanRemote(path);
+            } else {
+              remoteFiles.set(path, entry);
+            }
+          }
+        };
+
+        const scanLocal = async (localDirectory: vscode.Uri, remotePath: string): Promise<void> => {
+          const entries = await vscode.workspace.fs.readDirectory(localDirectory);
+          for (const [name, type] of entries) {
+            if (token.isCancellationRequested) throw new vscode.CancellationError();
+            if (!isSafeRemoteName(name)) {
+              throw new WebWorkflowError(`The local project contains an unsafe file name in ${remotePath}.`);
+            }
+            if ((type & vscode.FileType.SymbolicLink) !== 0) {
+              throw new WebWorkflowError(`Symbolic links are not supported: ${remotePath}${name}`);
+            }
+            const directory = (type & vscode.FileType.Directory) !== 0;
+            const path = `${remotePath}${name}${directory ? "/" : ""}`;
+            if (isLocalProjectMetadata(path, name, directory)) {
+              output.appendLine(`Skipped local project metadata: ${path}`);
+              continue;
+            }
+            progress.report({ message: path });
+            const localEntry = vscode.Uri.joinPath(localDirectory, name);
+            if (directory) {
+              if (remoteFiles.has(path.slice(0, -1))) {
+                throw new WebWorkflowError(`A remote file blocks the local directory ${path}.`);
+              }
+              await scanLocal(localEntry, path);
+              continue;
+            }
+            if (remoteDirectories.has(`${path}/`)) {
+              throw new WebWorkflowError(`A remote directory blocks the local file ${path}.`);
+            }
+
+            const content = await vscode.workspace.fs.readFile(localEntry);
+            const remote = remoteFiles.get(path);
+            let status: ProjectSyncCandidate["status"] | undefined;
+            if (!remote) {
+              status = "new";
+            } else if (remote.file_size !== content.byteLength) {
+              status = "modified";
+            } else {
+              const remoteContent = await client.readFile(device, path);
+              if (!Buffer.from(content).equals(Buffer.from(remoteContent))) status = "modified";
+            }
+            if (status) {
+              candidates.push({
+                path,
+                localUri: localEntry,
+                content,
+                status,
+                binary: isKnownBinaryPath(path),
+                remoteSize: remote?.file_size,
+              });
+            }
+          }
+        };
+
+        await scanRemote("/");
+        await scanLocal(localFolder.uri, "/");
+      });
+
+      if (candidates.length === 0) {
+        void vscode.window.showInformationMessage("The local project is already in sync with the device.");
+        return;
+      }
+
+      candidates.sort((left, right) => left.path.localeCompare(right.path));
+      const selectedItems = await vscode.window.showQuickPick<ProjectSyncQuickPickItem>(
+        candidates.map((candidate) => ({
+          label: `${candidate.status === "new" ? "$(diff-added)" : "$(diff-modified)"} ${candidate.path}`,
+          description: candidate.status === "new" ? "New" : "Modified",
+          detail: candidate.binary
+            ? `Binary · Local ${formatByteCount(candidate.content.byteLength)}${candidate.remoteSize === undefined ? "" : ` · Remote ${formatByteCount(candidate.remoteSize)}`}`
+            : candidate.path === "/settings.toml"
+              ? "Sensitive file · Not selected by default"
+              : `Text · Local ${formatByteCount(candidate.content.byteLength)}${candidate.remoteSize === undefined ? "" : ` · Remote ${formatByteCount(candidate.remoteSize)}`}`,
+          picked: candidate.path !== "/settings.toml",
+          candidate,
+        })),
+        {
+          canPickMany: true,
+          ignoreFocusOut: true,
+          placeHolder: "Select every file that may be created or overwritten on the device",
+          title: `Sync ${localFolder.name} to ${device.name}`,
+        },
+      );
+      if (!selectedItems || selectedItems.length === 0) return;
+      const selectedCandidates = selectedItems.map((item) => item.candidate);
+
+      const previewChoice = await vscode.window.showInformationMessage(
+        `${selectedCandidates.length} files selected for sync.`,
+        "Review Changes",
+        "Continue",
+        "Cancel",
+      );
+      if (!previewChoice || previewChoice === "Cancel") return;
+      if (previewChoice === "Review Changes") {
+        for (let index = 0; index < selectedCandidates.length; index += 1) {
+          const candidate = selectedCandidates[index];
+          if (!candidate.binary) {
+            if (candidate.status === "modified") {
+              await vscode.commands.executeCommand(
+                "vscode.diff",
+                remoteUri(device, candidate.path),
+                candidate.localUri,
+                `${candidate.path} (Remote ↔ Local)`,
+              );
+            } else {
+              const document = await vscode.workspace.openTextDocument(candidate.localUri);
+              await vscode.window.showTextDocument(document, { preview: true });
+            }
+          }
+
+          const last = index === selectedCandidates.length - 1;
+          const reviewAction = await vscode.window.showInformationMessage(
+            candidate.binary
+              ? `${candidate.path} is binary; Local ${formatByteCount(candidate.content.byteLength)}${candidate.remoteSize === undefined ? "" : `, Remote ${formatByteCount(candidate.remoteSize)}`}.`
+              : `Reviewing ${candidate.status} file ${candidate.path}.`,
+            last ? "Finish Review" : "Next",
+            last ? "Cancel" : "Finish Review",
+            ...(last ? [] : ["Cancel"]),
+          );
+          if (!reviewAction || reviewAction === "Cancel") return;
+          if (reviewAction === "Finish Review") break;
+        }
+      }
+
+      const newCount = selectedCandidates.filter((candidate) => candidate.status === "new").length;
+      const modifiedCount = selectedCandidates.length - newCount;
+      const includesSettings = selectedCandidates.some((candidate) => candidate.path === "/settings.toml");
+      const confirmation = await vscode.window.showWarningMessage(
+        `Sync ${newCount} new and ${modifiedCount} modified files to ${device.name}?`,
+        {
+          modal: true,
+          detail: includesSettings
+            ? "Selected remote files will be overwritten. settings.toml may change Wi-Fi credentials and Web Workflow access."
+            : "Selected remote files will be overwritten. Remote-only files will not be deleted.",
+        },
+        "Sync Selected Files",
+      );
+      if (confirmation !== "Sync Selected Files") return;
+
+      const neededDirectories = new Set<string>();
+      for (const candidate of selectedCandidates) {
+        const parts = candidate.path.split("/").filter(Boolean);
+        parts.pop();
+        let directory = "/";
+        for (const part of parts) {
+          directory += `${part}/`;
+          neededDirectories.add(directory);
+        }
+      }
+      const orderedDirectories = [...neededDirectories].sort(
+        (left, right) => left.split("/").length - right.split("/").length,
+      );
+      const orderedCandidates = [...selectedCandidates].sort((left, right) => {
+        const priority = (candidate: ProjectSyncCandidate): number => {
+          if (candidate.path === "/settings.toml") return 2;
+          if (candidate.path === "/code.py" || candidate.path === "/main.py") return 1;
+          return 0;
+        };
+        const priorityDifference = priority(left) - priority(right);
+        if (priorityDifference !== 0) return priorityDifference;
+        return left.path.localeCompare(right.path);
+      });
+
+      await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `Syncing ${localFolder.name} to ${device.name}`,
+        cancellable: false,
+      }, async (progress) => {
+        for (const directory of orderedDirectories) {
+          if (remoteFiles.has(directory.slice(0, -1))) {
+            throw new WebWorkflowError(`A remote file blocks the directory ${directory}.`);
+          }
+          if (!remoteDirectories.has(directory)) {
+            progress.report({ message: directory });
+            await client.createDirectory(device, directory);
+            remoteDirectories.add(directory);
+          }
+        }
+        for (const candidate of orderedCandidates) {
+          progress.report({ message: candidate.path });
+          await client.writeFile(device, candidate.path, candidate.content);
+          output.appendLine(`${candidate.status === "new" ? "Created" : "Updated"}: ${candidate.path}`);
+        }
+      });
+      tree.refresh();
+
+      const reload = await vscode.window.showInformationMessage(
+        `Synced ${newCount} new and ${modifiedCount} modified files to ${device.name}.`,
+        "Reload and Run",
+      );
+      if (reload === "Reload and Run") {
+        await vscode.commands.executeCommand("circuitpythonRemote.reloadAndRun");
+      }
+    } catch (error) {
+      if (error instanceof vscode.CancellationError) {
+        void vscode.window.showInformationMessage("Project comparison cancelled. No files were uploaded.");
+        return;
+      }
+      if (error instanceof WebWorkflowError && error.status === 401) {
+        await client.forgetPassword(device);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`CircuitPython Remote: Project sync stopped. ${message}`);
+    }
+  };
+
   const newFile = async (entry?: RemoteEntry): Promise<void> => {
     const device = entry?.device ?? tree.device;
     if (!device) {
@@ -1420,6 +1710,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("circuitpythonRemote.showOutput", showOutput),
     vscode.commands.registerCommand("circuitpythonRemote.reloadAndRun", reloadAndRun),
     vscode.commands.registerCommand("circuitpythonRemote.createLocalProject", createLocalProject),
+    vscode.commands.registerCommand("circuitpythonRemote.syncLocalProject", syncLocalProject),
     vscode.commands.registerCommand("circuitpythonRemote.newFile", newFile),
     vscode.commands.registerCommand("circuitpythonRemote.newFolder", newFolder),
     vscode.commands.registerCommand("circuitpythonRemote.deleteFile", deleteFile),

@@ -71,6 +71,11 @@
         "icon": "$(desktop-download)"
       },
       {
+        "command": "circuitpythonRemote.syncLocalProject",
+        "title": "CircuitPython Remote: Sync Local Project to Device",
+        "icon": "$(sync)"
+      },
+      {
         "command": "circuitpythonRemote.newFile",
         "title": "CircuitPython Remote: New File",
         "icon": "$(new-file)"
@@ -163,6 +168,11 @@
           "command": "circuitpythonRemote.createLocalProject",
           "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
           "group": "navigation@7"
+        },
+        {
+          "command": "circuitpythonRemote.syncLocalProject",
+          "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
+          "group": "navigation@8"
         }
       ],
       "view/item/context": [
