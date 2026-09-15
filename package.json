@@ -172,11 +172,6 @@
           "command": "circuitpythonRemote.createLocalProject",
           "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
           "group": "navigation@7"
-        },
-        {
-          "command": "circuitpythonRemote.syncLocalProject",
-          "when": "view == circuitpythonRemote.files && circuitpythonRemote.deviceSelected",
-          "group": "navigation@8"
         }
       ],
       "view/item/context": [
