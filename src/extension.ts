@@ -94,6 +94,10 @@ interface ProjectSyncQuickPickItem extends vscode.QuickPickItem {
   candidate: ProjectSyncCandidate;
 }
 
+interface WorkspaceDeviceBindings {
+  [folderUri: string]: CircuitPythonDevice;
+}
+
 function isLocalProjectMetadata(path: string, name: string, directory: boolean): boolean {
   if (isSystemMetadataName(name)) return true;
   if (directory && (name === ".git" || name === ".vscode"
@@ -904,6 +908,7 @@ function parseIpv4Address(value: string): { ip: string; port: number } | undefin
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  const workspaceBindingsKey = "circuitpythonRemote.workspaceDeviceBindings";
   const output = vscode.window.createOutputChannel("CircuitPython Remote");
   const consoleOutput = vscode.window.createOutputChannel("CircuitPython Output");
   const discovery = new CircuitPythonDiscovery(output);
@@ -911,6 +916,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const tree = new RemoteFileTree(client, output);
   const treeView = vscode.window.createTreeView("circuitpythonRemote.files", { treeDataProvider: tree, showCollapseAll: true });
   const remoteFiles = new RemoteFileSystem(discovery, client, () => tree.refresh());
+  const workspaceLinkStatus = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    49,
+  );
+  workspaceLinkStatus.command = "circuitpythonRemote.showWorkspaceLinkActions";
 
   const useDevice = async (device: CircuitPythonDevice): Promise<void> => {
     if (!(await client.ensurePassword(device))) return;
@@ -920,7 +930,108 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.commands.executeCommand("setContext", "circuitpythonRemote.deviceSelected", true);
   };
 
-  const connectByAddress = async (): Promise<void> => {
+  const localWorkspaceFolder = async (
+    placeHolder: string,
+  ): Promise<vscode.WorkspaceFolder | undefined> => {
+    const folders = vscode.workspace.workspaceFolders?.filter(
+      (folder) => folder.uri.scheme === "file",
+    ) ?? [];
+    if (folders.length === 0) {
+      void vscode.window.showInformationMessage("Open a local CircuitPython project folder first.");
+      return undefined;
+    }
+    if (folders.length === 1) return folders[0];
+
+    const selected = await vscode.window.showQuickPick(
+      folders.map((folder) => ({
+        label: folder.name,
+        description: folder.uri.fsPath,
+        folder,
+      })),
+      { placeHolder },
+    );
+    return selected?.folder;
+  };
+
+  const workspaceBindings = (): WorkspaceDeviceBindings =>
+    context.globalState.get<WorkspaceDeviceBindings>(workspaceBindingsKey, {});
+
+  const openLinkedFolders = (): { folder: vscode.WorkspaceFolder; device: CircuitPythonDevice }[] => {
+    const bindings = workspaceBindings();
+    return (vscode.workspace.workspaceFolders ?? []).flatMap((folder) => {
+      if (folder.uri.scheme !== "file") return [];
+      const device = bindings[folder.uri.toString()];
+      return device ? [{ folder, device }] : [];
+    });
+  };
+
+  const activeWorkspaceFolder = (): vscode.WorkspaceFolder | undefined => {
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    return activeUri ? vscode.workspace.getWorkspaceFolder(activeUri) : undefined;
+  };
+
+  const activeLinkedFolder = (): { folder: vscode.WorkspaceFolder; device: CircuitPythonDevice } | undefined => {
+    const activeFolder = activeWorkspaceFolder();
+    if (!activeFolder) return undefined;
+    const device = workspaceBindings()[activeFolder.uri.toString()];
+    return device ? { folder: activeFolder, device } : undefined;
+  };
+
+  const updateWorkspaceLinkStatus = (): void => {
+    const linkedFolders = openLinkedFolders();
+    if (linkedFolders.length === 0) {
+      workspaceLinkStatus.hide();
+      return;
+    }
+
+    const activeFolder = activeWorkspaceFolder();
+    const active = activeLinkedFolder();
+    if (activeFolder && !active) {
+      workspaceLinkStatus.hide();
+      return;
+    }
+
+    const linked = active ?? (linkedFolders.length === 1 ? linkedFolders[0] : undefined);
+    if (!linked) {
+      workspaceLinkStatus.text = `$(link) ${linkedFolders.length} linked projects`;
+      workspaceLinkStatus.tooltip = "Click to choose a linked CircuitPython project";
+      workspaceLinkStatus.show();
+      return;
+    }
+
+    workspaceLinkStatus.text = `$(link) ${linked.folder.name} → ${linked.device.name}`;
+    workspaceLinkStatus.tooltip = [
+      `Local project: ${linked.folder.uri.fsPath}`,
+      `Linked device: ${linked.device.name}`,
+      `Address: ${linked.device.ip}:${linked.device.port}`,
+      `Hostname: ${linked.device.hostname}`,
+      "",
+      "Binding does not guarantee that the device is currently reachable.",
+    ].join("\n");
+    workspaceLinkStatus.show();
+  };
+
+  const saveWorkspaceBinding = async (
+    folderUri: vscode.Uri,
+    device: CircuitPythonDevice,
+  ): Promise<void> => {
+    await context.globalState.update(workspaceBindingsKey, {
+      ...workspaceBindings(),
+      [folderUri.toString()]: device,
+    });
+    updateWorkspaceLinkStatus();
+  };
+
+  const boundDevice = (folderUri: vscode.Uri): CircuitPythonDevice | undefined => {
+    const saved = workspaceBindings()[folderUri.toString()];
+    if (!saved) return undefined;
+    const discovered = discovery.getDevice(saved.key);
+    const device = discovered ? { ...saved, ...discovered } : saved;
+    discovery.addManualDevice(device);
+    return device;
+  };
+
+  const promptForAddress = async (): Promise<CircuitPythonDevice | undefined> => {
     const address = await vscode.window.showInputBox({
       title: "Connect to CircuitPython by IP Address",
       prompt: "Enter the board's IPv4 address and optional Web Workflow port",
@@ -930,17 +1041,55 @@ export function activate(context: vscode.ExtensionContext): void {
         ? undefined
         : "Enter a valid IPv4 address with an optional port.",
     });
-    if (!address) return;
+    if (!address) return undefined;
 
     const target = parseIpv4Address(address.trim());
-    if (!target) return;
+    if (!target) return undefined;
+    const device = await client.identifyDevice(target.ip, target.port);
+    discovery.addManualDevice(device);
+    return device;
+  };
+
+  const connectByAddress = async (): Promise<void> => {
     try {
-      const device = await client.identifyDevice(target.ip, target.port);
-      discovery.addManualDevice(device);
+      const device = await promptForAddress();
+      if (!device) return;
       await useDevice(device);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       void vscode.window.showErrorMessage(`CircuitPython Remote: ${message}`);
+    }
+  };
+
+  const linkWorkspaceToDevice = async (
+    requestedFolder?: vscode.WorkspaceFolder,
+  ): Promise<void> => {
+    const folder = requestedFolder
+      ?? await localWorkspaceFolder("Select the local project to link");
+    if (!folder) return;
+
+    const selection = await discovery.pickDevice();
+    if (!selection) return;
+    let device: CircuitPythonDevice | undefined;
+    try {
+      device = selection === "manual" ? await promptForAddress() : selection;
+      if (!device) return;
+      if (!(await client.ensurePassword(device))) return;
+      await client.readDirectory(device, "/");
+      await saveWorkspaceBinding(folder.uri, device);
+      discovery.addManualDevice(device);
+      output.appendLine(
+        `Linked local workspace ${folder.uri.fsPath} to ${device.name} at ${device.ip}:${device.port}`,
+      );
+      void vscode.window.showInformationMessage(
+        `Linked ${folder.name} to ${device.name} at ${device.ip}:${device.port}.`,
+      );
+    } catch (error) {
+      if (device && error instanceof WebWorkflowError && error.status === 401) {
+        await client.forgetPassword(device);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`CircuitPython Remote: Unable to link workspace. ${message}`);
     }
   };
 
@@ -1066,6 +1215,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
         await downloadDirectory("/", destination);
       });
+      await saveWorkspaceBinding(destination, device);
 
       if (summary.includesSettings) {
         await vscode.window.showWarningMessage(
@@ -1096,32 +1246,22 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
-  const syncLocalProject = async (): Promise<void> => {
-    const device = tree.device;
+  const syncLocalProject = async (
+    requestedFolder?: vscode.WorkspaceFolder,
+  ): Promise<void> => {
+    const localFolder = requestedFolder
+      ?? await localWorkspaceFolder("Select the local project to sync");
+    if (!localFolder) return;
+    const device = boundDevice(localFolder.uri) ?? tree.device;
     if (!device) {
-      void vscode.window.showInformationMessage("Select a CircuitPython device first.");
-      return;
-    }
-
-    const localFolders = vscode.workspace.workspaceFolders?.filter(
-      (folder) => folder.uri.scheme === "file",
-    ) ?? [];
-    let localFolder = localFolders[0];
-    if (localFolders.length === 0) {
-      void vscode.window.showInformationMessage("Open a local CircuitPython project folder first.");
-      return;
-    }
-    if (localFolders.length > 1) {
-      const selected = await vscode.window.showQuickPick(
-        localFolders.map((folder) => ({
-          label: folder.name,
-          description: folder.uri.fsPath,
-          folder,
-        })),
-        { placeHolder: "Select the local project to sync" },
+      const link = await vscode.window.showInformationMessage(
+        "This workspace is not linked to a CircuitPython device.",
+        "Link Workspace",
       );
-      if (!selected) return;
-      localFolder = selected.folder;
+      if (link === "Link Workspace") {
+        await vscode.commands.executeCommand("circuitpythonRemote.linkWorkspaceToDevice");
+      }
+      return;
     }
 
     try {
@@ -1354,6 +1494,47 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       const message = error instanceof Error ? error.message : String(error);
       void vscode.window.showErrorMessage(`CircuitPython Remote: Project sync stopped. ${message}`);
+    }
+  };
+
+  const showWorkspaceLinkActions = async (): Promise<void> => {
+    const linkedFolders = openLinkedFolders();
+    if (linkedFolders.length === 0) return;
+
+    let linked = activeLinkedFolder()
+      ?? (linkedFolders.length === 1 ? linkedFolders[0] : undefined);
+    if (!linked) {
+      const selected = await vscode.window.showQuickPick(
+        linkedFolders.map((candidate) => ({
+          label: candidate.folder.name,
+          description: candidate.device.name,
+          detail: `${candidate.folder.uri.fsPath} → ${candidate.device.ip}:${candidate.device.port}`,
+          linked: candidate,
+        })),
+        { placeHolder: "Select a linked CircuitPython project" },
+      );
+      if (!selected) return;
+      linked = selected.linked;
+    }
+
+    const action = await vscode.window.showQuickPick([
+      {
+        label: "$(arrow-circle-up) Sync Local Project to Device",
+        description: linked.device.name,
+        action: "sync" as const,
+      },
+      {
+        label: "$(link) Link Workspace to Another Device",
+        description: linked.folder.name,
+        action: "link" as const,
+      },
+    ], {
+      placeHolder: `${linked.folder.name} is linked to ${linked.device.name}`,
+    });
+    if (action?.action === "sync") {
+      await syncLocalProject(linked.folder);
+    } else if (action?.action === "link") {
+      await linkWorkspaceToDevice(linked.folder);
     }
   };
 
@@ -1696,7 +1877,9 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   context.subscriptions.push(
-    output, discovery, client, treeView,
+    output, discovery, client, treeView, workspaceLinkStatus,
+    vscode.window.onDidChangeActiveTextEditor(updateWorkspaceLinkStatus),
+    vscode.workspace.onDidChangeWorkspaceFolders(updateWorkspaceLinkStatus),
     vscode.workspace.registerFileSystemProvider("circuitpython-remote", remoteFiles, {
       isCaseSensitive: true,
     }),
@@ -1711,6 +1894,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("circuitpythonRemote.reloadAndRun", reloadAndRun),
     vscode.commands.registerCommand("circuitpythonRemote.createLocalProject", createLocalProject),
     vscode.commands.registerCommand("circuitpythonRemote.syncLocalProject", syncLocalProject),
+    vscode.commands.registerCommand("circuitpythonRemote.linkWorkspaceToDevice", linkWorkspaceToDevice),
+    vscode.commands.registerCommand("circuitpythonRemote.showWorkspaceLinkActions", showWorkspaceLinkActions),
     vscode.commands.registerCommand("circuitpythonRemote.newFile", newFile),
     vscode.commands.registerCommand("circuitpythonRemote.newFolder", newFolder),
     vscode.commands.registerCommand("circuitpythonRemote.deleteFile", deleteFile),
@@ -1731,6 +1916,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await vscode.window.showTextDocument(document, { preview: true });
     }),
   );
+  updateWorkspaceLinkStatus();
   discovery.start();
 }
 

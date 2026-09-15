@@ -76,6 +76,10 @@
         "icon": "$(arrow-circle-up)"
       },
       {
+        "command": "circuitpythonRemote.linkWorkspaceToDevice",
+        "title": "CircuitPython Remote: Link Workspace to Device"
+      },
+      {
         "command": "circuitpythonRemote.newFile",
         "title": "CircuitPython Remote: New File",
         "icon": "$(new-file)"
