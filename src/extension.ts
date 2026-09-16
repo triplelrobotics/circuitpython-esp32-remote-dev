@@ -554,19 +554,32 @@ class WebWorkflowClient implements vscode.Disposable {
     const url = `http://${device.ip}:${device.port}${this.apiPath(path)}`;
     const method = init.method ?? "GET";
     this.output.appendLine(`${method} ${url}`);
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        ...init,
-        headers: {
-          ...init.headers,
-          Authorization: `Basic ${Buffer.from(`:${password}`).toString("base64")}`,
-        },
-        signal: AbortSignal.timeout(10_000),
-      });
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new WebWorkflowError(`Unable to reach ${device.ip}:${device.port}: ${detail}`);
+    const retryDelays = method === "GET" ? [300, 800] : [];
+    let response: Response | undefined;
+    for (let attempt = 0; response === undefined; attempt += 1) {
+      try {
+        response = await fetch(url, {
+          ...init,
+          headers: {
+            ...init.headers,
+            Authorization: `Basic ${Buffer.from(`:${password}`).toString("base64")}`,
+          },
+          signal: AbortSignal.timeout(10_000),
+        });
+      } catch (error) {
+        const cause = error instanceof Error
+          ? (error as Error & { cause?: unknown }).cause
+          : undefined;
+        const detail = `${error instanceof Error ? error.message : String(error)}${cause instanceof Error ? `: ${cause.message}` : ""}`;
+        const delay = retryDelays[attempt];
+        if (delay === undefined) {
+          throw new WebWorkflowError(`Unable to reach ${device.ip}:${device.port}: ${detail}`);
+        }
+        this.output.appendLine(
+          `${method} ${url} failed (${detail}); retrying in ${delay} ms (${attempt + 2}/${retryDelays.length + 1})`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
     }
     if (!response.ok) {
       if (response.status === 401) throw new WebWorkflowError("Incorrect Web Workflow password.", 401);
