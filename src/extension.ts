@@ -81,7 +81,7 @@ interface ProjectDownloadSummary {
   includesSettings: boolean;
 }
 
-interface ProjectSyncCandidate {
+interface ProjectSyncUploadCandidate {
   path: string;
   localUri: vscode.Uri;
   content: Uint8Array;
@@ -89,6 +89,15 @@ interface ProjectSyncCandidate {
   binary: boolean;
   remoteSize?: number;
 }
+
+interface ProjectSyncDeleteCandidate {
+  path: string;
+  status: "deleted";
+  binary: boolean;
+  remoteSize?: number;
+}
+
+type ProjectSyncCandidate = ProjectSyncUploadCandidate | ProjectSyncDeleteCandidate;
 
 interface ProjectSyncQuickPickItem extends vscode.QuickPickItem {
   candidate: ProjectSyncCandidate;
@@ -1267,6 +1276,7 @@ export function activate(context: vscode.ExtensionContext): void {
     try {
       const remoteFiles = new Map<string, DirectoryEntry>();
       const remoteDirectories = new Set<string>(["/"]);
+      const localFiles = new Set<string>();
       const candidates: ProjectSyncCandidate[] = [];
       await vscode.window.withProgress({
         location: vscode.ProgressLocation.Notification,
@@ -1282,6 +1292,10 @@ export function activate(context: vscode.ExtensionContext): void {
             }
             if (isSystemMetadataName(entry.name)) continue;
             const path = `${remotePath}${entry.name}${entry.directory ? "/" : ""}`;
+            if (isLocalProjectMetadata(path, entry.name, entry.directory)) {
+              output.appendLine(`Skipped remote project metadata: ${path}`);
+              continue;
+            }
             progress.report({ message: path });
             if (entry.directory) {
               remoteDirectories.add(path);
@@ -1317,13 +1331,14 @@ export function activate(context: vscode.ExtensionContext): void {
               await scanLocal(localEntry, path);
               continue;
             }
+            localFiles.add(path);
             if (remoteDirectories.has(`${path}/`)) {
               throw new WebWorkflowError(`A remote directory blocks the local file ${path}.`);
             }
 
             const content = await vscode.workspace.fs.readFile(localEntry);
             const remote = remoteFiles.get(path);
-            let status: ProjectSyncCandidate["status"] | undefined;
+            let status: ProjectSyncUploadCandidate["status"] | undefined;
             if (!remote) {
               status = "new";
             } else if (remote.file_size !== content.byteLength) {
@@ -1347,6 +1362,16 @@ export function activate(context: vscode.ExtensionContext): void {
 
         await scanRemote("/");
         await scanLocal(localFolder.uri, "/");
+
+        for (const [path, entry] of remoteFiles) {
+          if (localFiles.has(path)) continue;
+          candidates.push({
+            path,
+            status: "deleted",
+            binary: isKnownBinaryPath(path),
+            remoteSize: entry.file_size,
+          });
+        }
       });
 
       if (candidates.length === 0) {
@@ -1354,31 +1379,47 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      candidates.sort((left, right) => left.path.localeCompare(right.path));
+      candidates.sort((left, right) => {
+        const deletionOrder = Number(right.status === "deleted") - Number(left.status === "deleted");
+        return deletionOrder || left.path.localeCompare(right.path);
+      });
+      const detectedDeletionCount = candidates.filter(
+        (candidate) => candidate.status === "deleted",
+      ).length;
       const selectedItems = await vscode.window.showQuickPick<ProjectSyncQuickPickItem>(
         candidates.map((candidate) => ({
-          label: `${candidate.status === "new" ? "$(diff-added)" : "$(diff-modified)"} ${candidate.path}`,
-          description: candidate.status === "new" ? "New" : "Modified",
-          detail: candidate.binary
-            ? `Binary · Local ${formatByteCount(candidate.content.byteLength)}${candidate.remoteSize === undefined ? "" : ` · Remote ${formatByteCount(candidate.remoteSize)}`}`
-            : candidate.path === "/settings.toml"
-              ? "Sensitive file · Not selected by default"
-              : `Text · Local ${formatByteCount(candidate.content.byteLength)}${candidate.remoteSize === undefined ? "" : ` · Remote ${formatByteCount(candidate.remoteSize)}`}`,
-          picked: candidate.path !== "/settings.toml",
+          label: `${candidate.status === "new"
+            ? "$(diff-added)"
+            : candidate.status === "modified"
+              ? "$(diff-modified)"
+              : "$(diff-removed)"} ${candidate.path}`,
+          description: candidate.status === "new"
+            ? "New"
+            : candidate.status === "modified"
+              ? "Modified"
+              : "Delete file",
+          detail: candidate.status === "deleted"
+            ? `${candidate.binary ? "Binary" : "Text"} · Remote only${candidate.remoteSize === undefined ? "" : ` · ${formatByteCount(candidate.remoteSize)}`} · Not selected by default`
+            : candidate.binary
+              ? `Binary · Local ${formatByteCount(candidate.content.byteLength)}${candidate.remoteSize === undefined ? "" : ` · Remote ${formatByteCount(candidate.remoteSize)}`}`
+              : candidate.path === "/settings.toml"
+                ? "Sensitive file · Not selected by default"
+                : `Text · Local ${formatByteCount(candidate.content.byteLength)}${candidate.remoteSize === undefined ? "" : ` · Remote ${formatByteCount(candidate.remoteSize)}`}`,
+          picked: candidate.status !== "deleted" && candidate.path !== "/settings.toml",
           candidate,
         })),
         {
           canPickMany: true,
           ignoreFocusOut: true,
-          placeHolder: "Select every file that may be created or overwritten on the device",
-          title: `Sync ${localFolder.name} to ${device.name}`,
+          placeHolder: "Select files to create, update, or delete on the device",
+          title: `Sync ${localFolder.name} to ${device.name} · ${detectedDeletionCount} deletion${detectedDeletionCount === 1 ? "" : "s"} found`,
         },
       );
       if (!selectedItems || selectedItems.length === 0) return;
       const selectedCandidates = selectedItems.map((item) => item.candidate);
 
       const previewChoice = await vscode.window.showInformationMessage(
-        `${selectedCandidates.length} files selected for sync.`,
+        `${selectedCandidates.length} changes selected for sync.`,
         "Review Changes",
         "Continue",
         "Cancel",
@@ -1387,7 +1428,10 @@ export function activate(context: vscode.ExtensionContext): void {
       if (previewChoice === "Review Changes") {
         for (let index = 0; index < selectedCandidates.length; index += 1) {
           const candidate = selectedCandidates[index];
-          if (!candidate.binary) {
+          if (candidate.status === "deleted" && !candidate.binary) {
+            const document = await vscode.workspace.openTextDocument(remoteUri(device, candidate.path));
+            await vscode.window.showTextDocument(document, { preview: true });
+          } else if (candidate.status !== "deleted" && !candidate.binary) {
             if (candidate.status === "modified") {
               await vscode.commands.executeCommand(
                 "vscode.diff",
@@ -1403,7 +1447,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
           const last = index === selectedCandidates.length - 1;
           const reviewAction = await vscode.window.showInformationMessage(
-            candidate.binary
+            candidate.status === "deleted"
+              ? `Reviewing remote file deletion ${candidate.path}${candidate.remoteSize === undefined ? "" : ` (${formatByteCount(candidate.remoteSize)})`}.`
+              : candidate.binary
               ? `${candidate.path} is binary; Local ${formatByteCount(candidate.content.byteLength)}${candidate.remoteSize === undefined ? "" : `, Remote ${formatByteCount(candidate.remoteSize)}`}.`
               : `Reviewing ${candidate.status} file ${candidate.path}.`,
             last ? "Finish Review" : "Next",
@@ -1415,23 +1461,42 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       }
 
-      const newCount = selectedCandidates.filter((candidate) => candidate.status === "new").length;
-      const modifiedCount = selectedCandidates.length - newCount;
+      const uploadCandidates = selectedCandidates.filter(
+        (candidate): candidate is ProjectSyncUploadCandidate => candidate.status !== "deleted",
+      );
+      const deleteCandidates = selectedCandidates.filter(
+        (candidate): candidate is ProjectSyncDeleteCandidate => candidate.status === "deleted",
+      );
+      const newCount = uploadCandidates.filter((candidate) => candidate.status === "new").length;
+      const modifiedCount = uploadCandidates.length - newCount;
+      const selectedForDeletion = (uri: vscode.Uri): boolean =>
+        uri.scheme === "circuitpython-remote"
+        && uri.query === remoteUri(device, "/").query
+        && deleteCandidates.some((candidate) => uri.path === candidate.path);
+      const dirtyDeletedDocument = vscode.workspace.textDocuments.find(
+        (document) => document.isDirty && selectedForDeletion(document.uri),
+      );
+      if (dirtyDeletedDocument) {
+        void vscode.window.showWarningMessage(
+          `Save or discard the unsaved changes in ${dirtyDeletedDocument.uri.path} before syncing its deletion.`,
+        );
+        return;
+      }
       const includesSettings = selectedCandidates.some((candidate) => candidate.path === "/settings.toml");
       const confirmation = await vscode.window.showWarningMessage(
-        `Sync ${newCount} new and ${modifiedCount} modified files to ${device.name}?`,
+        `Sync ${newCount} new, ${modifiedCount} modified, and ${deleteCandidates.length} deleted items to ${device.name}?`,
         {
           modal: true,
           detail: includesSettings
-            ? "Selected remote files will be overwritten. settings.toml may change Wi-Fi credentials and Web Workflow access."
-            : "Selected remote files will be overwritten. Remote-only files will not be deleted.",
+            ? "Selected remote content will be overwritten or permanently deleted. settings.toml may change Wi-Fi credentials and Web Workflow access."
+            : "Selected remote files will be overwritten or permanently deleted. Remote directories will not be deleted.",
         },
-        "Sync Selected Files",
+        "Sync Selected Changes",
       );
-      if (confirmation !== "Sync Selected Files") return;
+      if (confirmation !== "Sync Selected Changes") return;
 
       const neededDirectories = new Set<string>();
-      for (const candidate of selectedCandidates) {
+      for (const candidate of uploadCandidates) {
         const parts = candidate.path.split("/").filter(Boolean);
         parts.pop();
         let directory = "/";
@@ -1443,8 +1508,18 @@ export function activate(context: vscode.ExtensionContext): void {
       const orderedDirectories = [...neededDirectories].sort(
         (left, right) => left.split("/").length - right.split("/").length,
       );
-      const orderedCandidates = [...selectedCandidates].sort((left, right) => {
-        const priority = (candidate: ProjectSyncCandidate): number => {
+      const orderedCandidates = [...uploadCandidates].sort((left, right) => {
+        const priority = (candidate: ProjectSyncUploadCandidate): number => {
+          if (candidate.path === "/settings.toml") return 2;
+          if (candidate.path === "/code.py" || candidate.path === "/main.py") return 1;
+          return 0;
+        };
+        const priorityDifference = priority(left) - priority(right);
+        if (priorityDifference !== 0) return priorityDifference;
+        return left.path.localeCompare(right.path);
+      });
+      const orderedDeleteCandidates = [...deleteCandidates].sort((left, right) => {
+        const priority = (candidate: ProjectSyncDeleteCandidate): number => {
           if (candidate.path === "/settings.toml") return 2;
           if (candidate.path === "/code.py" || candidate.path === "/main.py") return 1;
           return 0;
@@ -1474,11 +1549,23 @@ export function activate(context: vscode.ExtensionContext): void {
           await client.writeFile(device, candidate.path, candidate.content);
           output.appendLine(`${candidate.status === "new" ? "Created" : "Updated"}: ${candidate.path}`);
         }
+        for (const candidate of orderedDeleteCandidates) {
+          progress.report({ message: candidate.path });
+          await client.deleteFile(device, candidate.path);
+          output.appendLine(`Deleted: ${candidate.path}`);
+        }
       });
+      const deletedTabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs).filter(
+        (tab) => tab.input instanceof vscode.TabInputText
+          && selectedForDeletion(tab.input.uri),
+      );
+      if (deletedTabs.length > 0) {
+        await vscode.window.tabGroups.close(deletedTabs, true);
+      }
       tree.refresh();
 
       const reload = await vscode.window.showInformationMessage(
-        `Synced ${newCount} new and ${modifiedCount} modified files to ${device.name}.`,
+        `Synced ${newCount} new and ${modifiedCount} modified files; deleted ${deleteCandidates.length} files from ${device.name}.`,
         "Reload and Run",
       );
       if (reload === "Reload and Run") {
