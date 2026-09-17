@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.0.4 - Unreleased
+
+- Show CircuitPython program output wirelessly and support Reload and Run.
+- Create a local project by recursively downloading a device filesystem while
+  skipping system metadata.
+- Link local workspace roots to discovered devices or direct IP addresses and
+  restore those associations across VS Code sessions.
+- Show the active workspace-to-device association in the VS Code status bar,
+  including multi-root workspace handling.
+- Compare a linked local project with its device and selectively create,
+  update, or delete individual remote files, with text diff review and explicit
+  confirmation before overwrites or deletions.
+- Keep `settings.toml` and deletion candidates unselected by default, preserve
+  remote directories, and protect unsaved remote editors.
+- Retry transient Web Workflow GET failures with short backoff delays while
+  keeping write and delete operations single-attempt.
+
 ## 0.0.3 - 2026-09-11
 
 - Connect directly using a board's IPv4 address when mDNS discovery is
