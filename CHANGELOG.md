@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.4 - Unreleased
+## 0.0.4 - 2026-09-17
 
 - Show CircuitPython program output wirelessly and support Reload and Run.
 - Create a local project by recursively downloading a device filesystem while
